@@ -124,8 +124,11 @@ public static class JolietNamingRuleService
         JolietNamingRuleSet set=Load();
         warnings=set.Warnings;
         if (!set.Enabled) return null;
-        return set.Profiles.FirstOrDefault(p => Matches(p, resolvedIdentity));
+        return FindMatch(set, resolvedIdentity);
     }
+
+    internal static JolietNamingProfile? FindMatch(JolietNamingRuleSet set, IsoMasteringIdentity identity)
+        => set.Enabled ? set.Profiles.FirstOrDefault(profile => Matches(profile, identity)) : null;
 
     public static bool ProfileAllows(JolietNamingProfile? profile, string method)
         => profile is null || profile.Methods.Contains(method) || profile.Methods.Contains("All");
