@@ -239,31 +239,9 @@ public sealed partial class SkeletonResurrectionService
         @"<rom\s+name=""(?<name>[^""]+)""\s+size=""(?<size>\d+)""\s+crc=""(?<crc>[0-9A-Fa-f]{8})""\s+md5=""(?<md5>[0-9A-Fa-f]{32})""\s+sha1=""(?<sha1>[0-9A-Fa-f]{40})""",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private static readonly byte[] SyncPattern =
-    {
-        0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00
-    };
+    private static ReadOnlySpan<byte> SyncPattern => CdRawSectorCodec.SyncPattern;
 
     private static readonly byte[] Cd001 = Encoding.ASCII.GetBytes("CD001");
-    private static readonly byte[] EccForward = new byte[256];
-    private static readonly byte[] EccBackward = new byte[256];
-    private static readonly uint[] EdcTable = new uint[256];
-
-    static SkeletonResurrectionService()
-    {
-        for (int i = 0; i < 256; i++)
-        {
-            int j = (i << 1) ^ ((i & 0x80) != 0 ? 0x11D : 0);
-            EccForward[i] = (byte)j;
-            EccBackward[i ^ j] = (byte)i;
-
-            uint edc = (uint)i;
-            for (int bit = 0; bit < 8; bit++)
-                edc = (edc >> 1) ^ ((edc & 1) != 0 ? 0xD8018001u : 0u);
-            EdcTable[i] = edc;
-        }
-    }
 
     private sealed class HashCacheDocument
     {

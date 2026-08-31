@@ -74,16 +74,17 @@ public sealed partial class Iso2BinService
         CdSectorMode mode,
         XaSectorMetadata? xaMetadata = null)
     {
-        sector.Clear();
-        SyncPattern.AsSpan().CopyTo(sector);
-        WriteMsfHeader(sector, lba, mode);
+        CdRawSectorCodec.InitializeSector(
+            sector,
+            lba,
+            mode == CdSectorMode.Mode1 ? (byte)0x01 : (byte)0x02);
 
         if (mode == CdSectorMode.Mode1)
         {
             userData.CopyTo(sector.Slice(16, CookedSectorSize));
-            uint edc = ComputeEdc(sector.Slice(0, 2064));
+            uint edc = CdRawSectorCodec.ComputeEdc(sector.Slice(0, 2064));
             BinaryPrimitives.WriteUInt32LittleEndian(sector.Slice(2064, 4), edc);
-            GenerateEcc(sector, zeroAddress: false);
+            CdRawSectorCodec.GenerateEcc(sector, zeroAddress: false);
         }
         else
         {
@@ -95,80 +96,9 @@ public sealed partial class Iso2BinService
             sector.Slice(16, 4).CopyTo(sector.Slice(20, 4));
             userData.CopyTo(sector.Slice(24, CookedSectorSize));
 
-            uint edc = ComputeEdc(sector.Slice(16, 2056));
+            uint edc = CdRawSectorCodec.ComputeEdc(sector.Slice(16, 2056));
             BinaryPrimitives.WriteUInt32LittleEndian(sector.Slice(2072, 4), edc);
-            GenerateEcc(sector, zeroAddress: true);
-        }
-    }
-
-    private static void WriteMsfHeader(Span<byte> sector, long lba, CdSectorMode mode)
-    {
-        long absoluteFrame = lba + 150;
-        int minute = (int)(absoluteFrame / (75 * 60));
-        int second = (int)((absoluteFrame / 75) % 60);
-        int frame = (int)(absoluteFrame % 75);
-
-        sector[12] = ToBcd(minute);
-        sector[13] = ToBcd(second);
-        sector[14] = ToBcd(frame);
-        sector[15] = mode == CdSectorMode.Mode1 ? (byte)0x01 : (byte)0x02;
-    }
-
-    private static byte ToBcd(int value) => (byte)(((value / 10) << 4) | (value % 10));
-
-    private static uint ComputeEdc(ReadOnlySpan<byte> data)
-    {
-        uint edc = 0;
-        foreach (byte value in data)
-            edc = (edc >> 8) ^ EdcTable[(edc ^ value) & 0xFF];
-        return edc;
-    }
-
-    private static void GenerateEcc(Span<byte> sector, bool zeroAddress)
-    {
-        Span<byte> savedAddress = stackalloc byte[4];
-        if (zeroAddress)
-        {
-            sector.Slice(12, 4).CopyTo(savedAddress);
-            sector.Slice(12, 4).Clear();
-        }
-
-        ComputeEccBlock(sector.Slice(12), 86, 24, 2, 86, sector.Slice(2076, 172));
-        ComputeEccBlock(sector.Slice(12), 52, 43, 86, 88, sector.Slice(2248, 104));
-
-        if (zeroAddress)
-            savedAddress.CopyTo(sector.Slice(12, 4));
-    }
-
-    private static void ComputeEccBlock(
-        ReadOnlySpan<byte> source,
-        int majorCount,
-        int minorCount,
-        int majorMult,
-        int minorInc,
-        Span<byte> destination)
-    {
-        int size = majorCount * minorCount;
-        for (int major = 0; major < majorCount; major++)
-        {
-            int index = (major >> 1) * majorMult + (major & 1);
-            byte eccA = 0;
-            byte eccB = 0;
-
-            for (int minor = 0; minor < minorCount; minor++)
-            {
-                byte temp = source[index];
-                index += minorInc;
-                if (index >= size)
-                    index -= size;
-                eccA ^= temp;
-                eccB ^= temp;
-                eccA = EccForward[eccA];
-            }
-
-            eccA = EccBackward[EccForward[eccA] ^ eccB];
-            destination[major] = eccA;
-            destination[major + majorCount] = (byte)(eccA ^ eccB);
+            CdRawSectorCodec.GenerateEcc(sector, zeroAddress: true);
         }
     }
 }

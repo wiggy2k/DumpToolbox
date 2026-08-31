@@ -101,18 +101,10 @@ public sealed partial class Iso2BinService
     private const int BatchSectors = 256;
     private const int MaxCdLba = 449_849;
 
-    private static readonly byte[] SyncPattern =
-    {
-        0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00
-    };
+    private static ReadOnlySpan<byte> SyncPattern => CdRawSectorCodec.SyncPattern;
 
     private static readonly byte[] XaMarker = Encoding.ASCII.GetBytes("CD-XA001");
     private static readonly byte[] Cd001 = Encoding.ASCII.GetBytes("CD001");
-
-    private static readonly byte[] EccForward = new byte[256];
-    private static readonly byte[] EccBackward = new byte[256];
-    private static readonly uint[] EdcTable = new uint[256];
 
     private static readonly Regex FileRegex = new(
         "^\\s*FILE\\s+(?:\"(?<name>[^\"]+)\"|(?<name>\\S+))\\s+(?<type>\\S+)\\s*$",
@@ -132,21 +124,6 @@ public sealed partial class Iso2BinService
     private static readonly Regex DicChannelNumberRegex = new(@"ChannelNum\[(?<v>[0-9A-Fa-f]{2})\]", RegexOptions.Compiled);
     private static readonly Regex DicSubmodeRegex = new(@"Submode\[(?<v>[0-9A-Fa-f]{2})\]", RegexOptions.Compiled);
     private static readonly Regex DicCodingInfoRegex = new(@"CodingInfo\[(?<v>[0-9A-Fa-f]{2})\]", RegexOptions.Compiled);
-
-    static Iso2BinService()
-    {
-        for (int i = 0; i < 256; i++)
-        {
-            int j = (i << 1) ^ ((i & 0x80) != 0 ? 0x11D : 0);
-            EccForward[i] = (byte)j;
-            EccBackward[i ^ j] = (byte)i;
-
-            uint edc = (uint)i;
-            for (int bit = 0; bit < 8; bit++)
-                edc = (edc >> 1) ^ ((edc & 1) != 0 ? 0xD8018001u : 0u);
-            EdcTable[i] = edc;
-        }
-    }
 
     public async Task<IsoInspectionResult> InspectAsync(string inputPath, CancellationToken cancellationToken = default)
     {
