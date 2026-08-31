@@ -1,2 +1,32 @@
+# Build and IDE output
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+
+# User settings and editable runtime rule copies
 DumpToolbox.ini
 **/DumpToolbox.ini
+EOFSlackRules.ini
+**/EOFSlackRules.ini
+JolietNamingRules.ini
+**/JolietNamingRules.ini
+
+# Runtime catalogues and recovery state
+*.dumptoolbox_dicstate.json
+.dumptoolbox_hashcache.json
+**/.dumptoolbox_dic_donor_cache/
+**/skeletool_sha1_catalogue.sqlite*
+**/audio_heads_tails.sqlite*
+**/disc_mastering_evidence.sqlite*
+**/AudioHeadsandTails.bin
+
+# Interrupted/temporary output
+*.partial
+*.partialdata
+*.tmp
+
+# OS metadata
+.DS_Store
+Thumbs.db
