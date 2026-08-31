@@ -81,7 +81,6 @@ public sealed partial class DicLogImportService
         @"^==========\s+LBA\[(?<lba>-?\d+),[^\]]*\]:\s+(?<kind>.*?)\s+==========\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private static readonly Regex EccLbaRegex = new(@"LBA\[(?<lba>-?\d+),", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex EccSectorRecordRegex = new(
         @"^LBA\[(?<lba>-?\d+),\s*(?:0x)?(?<hex>[0-9A-Fa-f]+)\](?:,\s*MSF\[(?<msf>[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2})\])?\s*,?\s*(?<desc>.+?)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);

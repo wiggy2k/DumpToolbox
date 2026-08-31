@@ -257,19 +257,6 @@ public sealed partial class DicLogImportService
             XaSubheaderOverride is { Length: 8 } xa &&
             !xa.AsSpan(0, 4).SequenceEqual(xa.AsSpan(4, 4));
 
-        public bool NeedsExactRawDonor =>
-            IsAudio ||
-            IsUnknown ||
-            HasBlockIndicators ||
-            HasMissingMsf ||
-            SummaryInvalidMode ||
-            HasInvalidSync ||
-            HasZeroSync ||
-            SummaryInvalidSync ||
-            SummaryZeroSync ||
-            XaSubheaderCopiesDiffer ||
-            SummarySubheaderMismatch ||
-            SummaryExpectedZeroMismatch;
     }
 
     private sealed record DicFileSlackRegion(

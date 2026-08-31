@@ -514,17 +514,6 @@ public partial class MainWindow : Window
             node.Status = "○";
     }
 
-    private void ResetSkeletonMatchStatuses()
-    {
-        if (_skeletonInspection is null)
-            return;
-        foreach (SkeletonContentEntry entry in _skeletonInspection.Entries)
-        {
-            if (_skeletonNodes.TryGetValue(entry.Path, out SkeletonTreeNode? node))
-                SetInitialSkeletonNodeStatus(node, entry);
-        }
-    }
-
     private void MarkSkeletonMissingStatuses()
     {
         if (_skeletonInspection is null)

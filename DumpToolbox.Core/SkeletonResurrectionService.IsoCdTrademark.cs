@@ -25,7 +25,8 @@ public sealed partial class SkeletonResurrectionService
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!TryReadIsoCdTrademarkDescriptor(inspection, imagePath, out IsoCdTrademarkDescriptor? descriptor, out string? reason))
+        if (!TryReadIsoCdTrademarkDescriptor(inspection, imagePath, out IsoCdTrademarkDescriptor? descriptor, out string? reason) ||
+            descriptor is null)
         {
             if (!string.IsNullOrWhiteSpace(reason))
                 activity?.Report($"ISOCD TM: {reason}");

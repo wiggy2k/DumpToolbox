@@ -59,14 +59,6 @@ public sealed class AudioHeadsTailsCorpusWriterSession : IAsyncDisposable
         _log?.Report($"CORPUS: queued {count:N0} track pair(s) / {chunk.Length:N0} byte(s); {queued:N0} byte(s) queued during this scan.");
     }
 
-    internal async ValueTask AppendPairAsync(byte[] head, byte[] tail, CancellationToken ct = default)
-    {
-        byte[] chunk = new byte[head.Length + tail.Length];
-        Buffer.BlockCopy(head, 0, chunk, 0, head.Length);
-        Buffer.BlockCopy(tail, 0, chunk, head.Length, tail.Length);
-        await _queue.Writer.WriteAsync(chunk, ct).ConfigureAwait(false);
-    }
-
     public async Task CompleteAsync(CancellationToken ct = default)
     {
         if (Interlocked.Exchange(ref _completed, 1) == 0)

@@ -181,20 +181,6 @@ public partial class MainWindow
         SignalDicLogPump();
     }
 
-    private void AppendDicLogBatch(IEnumerable<string> messages)
-    {
-        bool any = false;
-        foreach (string message in messages)
-        {
-            _dicLogQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] {message}");
-            any = true;
-        }
-
-        if (any)
-            SignalDicLogPump();
-    }
-
-
     private void SignalDicLogPump()
     {
         if (Interlocked.Exchange(ref _dicLogSignalPending, 1) == 0)
