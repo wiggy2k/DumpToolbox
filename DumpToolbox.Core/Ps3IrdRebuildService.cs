@@ -131,57 +131,63 @@ public sealed class Ps3IrdRebuildService
             throw new InvalidOperationException($"Source verification failed: {verification.Missing} missing, {verification.Invalid} invalid file(s).");
 
         using IrdImage ird = IrdImage.Load(irdPath);
-        string? parent = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+        string finalOutputPath = Path.GetFullPath(outputPath);
+        string partialOutputPath = CreatePartialOutputPath(finalOutputPath);
+        string? parent = Path.GetDirectoryName(finalOutputPath);
         if (!string.IsNullOrWhiteSpace(parent))
             Directory.CreateDirectory(parent);
 
         try
         {
-            await using var output = new FileStream(outputPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            ird.Header.Position = 0;
-            await ird.Header.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
-
-            var checks = verification.Files.OrderBy(x => x.Entry.FirstSector).ToArray();
-            byte[] buffer = new byte[1024 * 1024];
-            for (int i = 0; i < checks.Length; i++)
+            await using (var output = new FileStream(partialOutputPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                Ps3IrdFileCheck check = checks[i];
-                string source = check.SourcePath!;
-                progress?.Report(new("Rebuild", i + 1, checks.Length, $"Writing: {check.Entry.Path}", Percent(i, checks.Length)));
+                ird.Header.Position = 0;
+                await ird.Header.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
 
-                await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                foreach (Ps3IrdExtent extent in check.Entry.Extents)
+                var checks = verification.Files.OrderBy(x => x.Entry.FirstSector).ToArray();
+                byte[] buffer = new byte[1024 * 1024];
+                for (int i = 0; i < checks.Length; i++)
                 {
-                    output.Position = checked(extent.FirstSector * (long)ird.BlockSize);
-                    long remaining = extent.Length;
-                    while (remaining > 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Ps3IrdFileCheck check = checks[i];
+                    string source = check.SourcePath!;
+                    progress?.Report(new("Rebuild", i + 1, checks.Length, $"Writing: {check.Entry.Path}", Percent(i, checks.Length)));
+
+                    await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    foreach (Ps3IrdExtent extent in check.Entry.Extents)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        int wanted = (int)Math.Min(buffer.Length, remaining);
-                        int read = await input.ReadAsync(buffer.AsMemory(0, wanted), cancellationToken).ConfigureAwait(false);
-                        if (read <= 0)
-                            throw new EndOfStreamException($"Unexpected end of source file: {source}");
-                        await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                        remaining -= read;
+                        output.Position = checked(extent.FirstSector * (long)ird.BlockSize);
+                        long remaining = extent.Length;
+                        while (remaining > 0)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            int wanted = (int)Math.Min(buffer.Length, remaining);
+                            int read = await input.ReadAsync(buffer.AsMemory(0, wanted), cancellationToken).ConfigureAwait(false);
+                            if (read <= 0)
+                                throw new EndOfStreamException($"Unexpected end of source file: {source}");
+                            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                            remaining -= read;
+                        }
                     }
+
+                    if (input.Position != check.Entry.Length)
+                        throw new InvalidDataException($"Source file length changed while rebuilding: {source}");
                 }
 
-                if (input.Position != check.Entry.Length)
-                    throw new InvalidDataException($"Source file length changed while rebuilding: {source}");
+                output.Position = output.Length;
+                ird.Footer.Position = 0;
+                await ird.Footer.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+                if ((ulong)output.Length != ird.DiscSize)
+                    throw new InvalidDataException($"Rebuilt ISO size is {output.Length:N0} bytes; IRD expects {ird.DiscSize:N0} bytes.");
             }
 
-            output.Position = output.Length;
-            ird.Footer.Position = 0;
-            await ird.Footer.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
-            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-
-            if ((ulong)output.Length != ird.DiscSize)
-                throw new InvalidDataException($"Rebuilt ISO size is {output.Length:N0} bytes; IRD expects {ird.DiscSize:N0} bytes.");
+            File.Move(partialOutputPath, finalOutputPath, overwrite: true);
         }
         catch
         {
-            try { if (File.Exists(outputPath)) File.Delete(outputPath); } catch { }
+            DeleteFileQuietly(partialOutputPath);
             throw;
         }
 
@@ -192,7 +198,7 @@ public sealed class Ps3IrdRebuildService
         progress?.Report(new("Rebuild", verification.Files.Count, verification.Files.Count,
             "Plain ISO complete; IRD region-hash verification is deferred until encryption.", 100));
 
-        return new(outputPath, 0, ird.Regions.Count, false, false);
+        return new(finalOutputPath, 0, ird.Regions.Count, false, false);
     }
 
 
@@ -234,7 +240,9 @@ public sealed class Ps3IrdRebuildService
         if ((ulong)plainInfo.Length != ird.DiscSize)
             throw new InvalidDataException($"Plain ISO size is {plainInfo.Length:N0} bytes; IRD expects {ird.DiscSize:N0} bytes.");
 
-        string? parent = Path.GetDirectoryName(Path.GetFullPath(encryptedOutputPath));
+        string finalOutputPath = Path.GetFullPath(encryptedOutputPath);
+        string partialOutputPath = CreatePartialOutputPath(finalOutputPath);
+        string? parent = Path.GetDirectoryName(finalOutputPath);
         if (!string.IsNullOrWhiteSpace(parent))
             Directory.CreateDirectory(parent);
 
@@ -245,96 +253,112 @@ public sealed class Ps3IrdRebuildService
         long totalSectors = (long)(ird.DiscSize / (ulong)sectorSize);
         long completedSectors = 0;
 
+        int verified;
         try
         {
             await using var input = new FileStream(plainIsoPath, FileMode.Open, FileAccess.Read, FileShare.Read, inputBuffer.Length, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await using var output = new FileStream(encryptedOutputPath, FileMode.Create, FileAccess.Write, FileShare.None, outputBuffer.Length, FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-            foreach (Ps3IrdRegion region in ird.Regions)
+            await using (var output = new FileStream(partialOutputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, outputBuffer.Length, FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                input.Position = checked((long)region.StartSector * sectorSize);
-                output.Position = input.Position;
-                long remaining = region.LengthSectors;
-                progress?.Report(new("Encrypt", (int)Math.Min(completedSectors, int.MaxValue), (int)Math.Min(totalSectors, int.MaxValue),
-                    $"{(region.IsPlain ? "Copying" : "Encrypting")} region {region.Index + 1}/{ird.Regions.Count}: sectors {region.StartSector:N0}-{region.EndSector:N0}",
-                    totalSectors == 0 ? 0 : completedSectors * 100.0 / totalSectors));
-
-                while (remaining > 0)
+                foreach (Ps3IrdRegion region in ird.Regions)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    int sectors = (int)Math.Min(sectorsPerChunk, remaining);
-                    int bytes = checked(sectors * sectorSize);
-                    await ReadExactlyAsync(input, inputBuffer.AsMemory(0, bytes), cancellationToken).ConfigureAwait(false);
-
-                    if (region.IsPlain)
-                    {
-                        Buffer.BlockCopy(inputBuffer, 0, outputBuffer, 0, bytes);
-                    }
-                    else
-                    {
-                        uint firstLba = checked((uint)(region.StartSector + (region.LengthSectors - (uint)remaining)));
-                        var options = new ParallelOptions
-                        {
-                            CancellationToken = cancellationToken,
-                            MaxDegreeOfParallelism = Math.Max(1, Math.Min(Environment.ProcessorCount, 8))
-                        };
-                        Parallel.For(0, sectors, options,
-                            () =>
-                            {
-                                Aes aes = Aes.Create();
-                                aes.Key = discKey;
-                                aes.Mode = CipherMode.CBC;
-                                aes.Padding = PaddingMode.None;
-                                return aes;
-                            },
-                            (sectorIndex, _, aes) =>
-                            {
-                                Span<byte> iv = stackalloc byte[16];
-                                BinaryPrimitives.WriteUInt32BigEndian(iv[12..], checked(firstLba + (uint)sectorIndex));
-                                int offset = checked(sectorIndex * sectorSize);
-                                aes.EncryptCbc(inputBuffer.AsSpan(offset, sectorSize), iv, outputBuffer.AsSpan(offset, sectorSize), PaddingMode.None);
-                                return aes;
-                            },
-                            aes => aes.Dispose());
-                    }
-
-                    await output.WriteAsync(outputBuffer.AsMemory(0, bytes), cancellationToken).ConfigureAwait(false);
-                    remaining -= sectors;
-                    completedSectors += sectors;
-
-                    // Report every chunk. Progress<T> marshals this back to the Avalonia UI
-                    // thread while the encryption itself remains on the worker thread.
-                    double percent = totalSectors == 0 ? 0 : completedSectors * 98.0 / totalSectors;
-                    progress?.Report(new(
-                        "Encrypt",
-                        (int)Math.Min(completedSectors, int.MaxValue),
-                        (int)Math.Min(totalSectors, int.MaxValue),
+                    input.Position = checked((long)region.StartSector * sectorSize);
+                    output.Position = input.Position;
+                    long remaining = region.LengthSectors;
+                    progress?.Report(new("Encrypt", (int)Math.Min(completedSectors, int.MaxValue), (int)Math.Min(totalSectors, int.MaxValue),
                         $"{(region.IsPlain ? "Copying" : "Encrypting")} region {region.Index + 1}/{ird.Regions.Count}: sectors {region.StartSector:N0}-{region.EndSector:N0}",
-                        percent));
+                        totalSectors == 0 ? 0 : completedSectors * 100.0 / totalSectors));
+
+                    while (remaining > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        int sectors = (int)Math.Min(sectorsPerChunk, remaining);
+                        int bytes = checked(sectors * sectorSize);
+                        await ReadExactlyAsync(input, inputBuffer.AsMemory(0, bytes), cancellationToken).ConfigureAwait(false);
+
+                        if (region.IsPlain)
+                        {
+                            Buffer.BlockCopy(inputBuffer, 0, outputBuffer, 0, bytes);
+                        }
+                        else
+                        {
+                            uint firstLba = checked((uint)(region.StartSector + (region.LengthSectors - (uint)remaining)));
+                            var options = new ParallelOptions
+                            {
+                                CancellationToken = cancellationToken,
+                                MaxDegreeOfParallelism = Math.Max(1, Math.Min(Environment.ProcessorCount, 8))
+                            };
+                            Parallel.For(0, sectors, options,
+                                () =>
+                                {
+                                    Aes aes = Aes.Create();
+                                    aes.Key = discKey;
+                                    aes.Mode = CipherMode.CBC;
+                                    aes.Padding = PaddingMode.None;
+                                    return aes;
+                                },
+                                (sectorIndex, _, aes) =>
+                                {
+                                    Span<byte> iv = stackalloc byte[16];
+                                    BinaryPrimitives.WriteUInt32BigEndian(iv[12..], checked(firstLba + (uint)sectorIndex));
+                                    int offset = checked(sectorIndex * sectorSize);
+                                    aes.EncryptCbc(inputBuffer.AsSpan(offset, sectorSize), iv, outputBuffer.AsSpan(offset, sectorSize), PaddingMode.None);
+                                    return aes;
+                                },
+                                aes => aes.Dispose());
+                        }
+
+                        await output.WriteAsync(outputBuffer.AsMemory(0, bytes), cancellationToken).ConfigureAwait(false);
+                        remaining -= sectors;
+                        completedSectors += sectors;
+
+                        // Report every chunk. Progress<T> marshals this back to the Avalonia UI
+                        // thread while the encryption itself remains on the worker thread.
+                        double percent = totalSectors == 0 ? 0 : completedSectors * 98.0 / totalSectors;
+                        progress?.Report(new(
+                            "Encrypt",
+                            (int)Math.Min(completedSectors, int.MaxValue),
+                            (int)Math.Min(totalSectors, int.MaxValue),
+                            $"{(region.IsPlain ? "Copying" : "Encrypting")} region {region.Index + 1}/{ird.Regions.Count}: sectors {region.StartSector:N0}-{region.EndSector:N0}",
+                            percent));
+                    }
                 }
+
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+            progress?.Report(new("Verify ISO", 0, ird.Regions.Count, "Verifying encrypted ISO against IRD region hashes...", 99));
+            verified = await VerifyRegionsAsync(partialOutputPath, ird, progress, cancellationToken).ConfigureAwait(false);
+            if (verified != ird.Regions.Count)
+                throw new InvalidDataException($"Encrypted ISO IRD region verification failed ({verified}/{ird.Regions.Count} regions matched). Check that the supplied value is the 16-byte disc key for this disc.");
+
+            File.Move(partialOutputPath, finalOutputPath, overwrite: true);
         }
         catch
         {
-            try { if (File.Exists(encryptedOutputPath)) File.Delete(encryptedOutputPath); } catch { }
+            DeleteFileQuietly(partialOutputPath);
             throw;
-        }
-
-        progress?.Report(new("Verify ISO", 0, ird.Regions.Count, "Verifying encrypted ISO against IRD region hashes...", 99));
-        int verified = await VerifyRegionsAsync(encryptedOutputPath, ird, progress, cancellationToken).ConfigureAwait(false);
-        bool passed = verified == ird.Regions.Count;
-        if (!passed)
-        {
-            try { File.Delete(encryptedOutputPath); } catch { }
-            throw new InvalidDataException($"Encrypted ISO IRD region verification failed ({verified}/{ird.Regions.Count} regions matched). Output was removed. Check that the supplied value is the 16-byte disc key for this disc.");
         }
 
         progress?.Report(new("Encrypt", (int)Math.Min(totalSectors, int.MaxValue), (int)Math.Min(totalSectors, int.MaxValue),
             $"Encrypted ISO complete; {verified}/{ird.Regions.Count} IRD regions verified.", 100));
-        return new(encryptedOutputPath, verified, ird.Regions.Count, true, true);
+        return new(finalOutputPath, verified, ird.Regions.Count, true, true);
+    }
+
+    private static string CreatePartialOutputPath(string finalOutputPath)
+        => finalOutputPath + $".{Guid.NewGuid():N}.partial";
+
+    private static void DeleteFileQuietly(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // Best-effort cleanup must not hide the original rebuild/encryption failure.
+        }
     }
 
     private static byte[] ParseDiscKeyText(string value)
