@@ -12,7 +12,7 @@
         </StackPanel>
 
         <StackPanel Grid.Row="1" Spacing="4">
-          <TextBlock Text="Optional CUE sheet ⓘ" FontWeight="SemiBold" ToolTip.Tip="Recommended for multi-track audio-edge recovery and required for Track 02 pregap correction. Without a CUE, FindCRCs can still infer a safe singleton edge candidate when exactly two targets are supplied and exactly one ordinary match is found. The referenced CUE files do not need to exist."/>
+          <TextBlock Text="Optional CUE sheet" FontWeight="SemiBold"/>
           <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
             <TextBox x:Name="FindCrcsCueBox" Grid.Column="0" Watermark="Optional: choose the disc CUE for full audio-track mapping / Track 02 pregap fixes..."/>
             <Button x:Name="FindCrcsCueBrowseButton" Grid.Column="1" Click="FindCrcsCueBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
@@ -22,7 +22,7 @@
         </StackPanel>
 
         <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-          <TextBlock Grid.Column="0" Text="Hash targets ⓘ" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="Paste a redump.info disc URL or numeric disc ID to import its hashes, destination filenames and CUE automatically; alternatively paste Redump track/file rows, or SIZE CRC32 [MD5]. Extra columns are ignored. FindCRCs always searches at 1-byte alignment and verifies CRC32+MD5."/>
+          <TextBlock Grid.Column="0" Text="Hash targets" FontWeight="SemiBold" VerticalAlignment="Center"/>
           <Button x:Name="TargetsClearButton" Grid.Column="1" Content="Clear" Click="TargetsClearButton_Click"/>
         </Grid>
 
@@ -36,9 +36,9 @@
           </Grid>
           <StackPanel Grid.Row="1" Spacing="5">
             <WrapPanel Orientation="Horizontal">
-              <CheckBox x:Name="FindCrcsEdgeRepairCheckBox" Content="Attempt to fix under-dumped Audio edges ⓘ" IsChecked="False" IsEnabled="True" VerticalAlignment="Center" Margin="0,0,18,0" ToolTip.Tip="With a CUE, only the first and last AUDIO tracks are considered. Without a CUE, exactly two targets with exactly one verified ordinary match can be treated as a singleton edge case. Safe source boundaries are required. Exact-sized extents test zero-silence shifts in both directions; short extents exhaustively test the missing zero-byte silence split between start and end. Every repair must verify CRC32/MD5."/>
-              <CheckBox x:Name="FindCrcsPregapScrambleCheckBox" Content="Scramble Track 2 pregap data sectors if present ⓘ" IsChecked="False" IsEnabled="False" VerticalAlignment="Center" Margin="0,0,18,0" ToolTip.Tip="Mixed-mode only. Correct recognised empty, unscrambled raw CD-ROM data sectors anywhere in Track 02's file-backed INDEX 00 pregap, then run a normal 1-byte FindCRCs search across the corrected pregap/Track-02 window. The final audio edge is used as a signed mirror: if it is short by N bytes, Track 02 tests removing N all-zero PCM bytes; if it has N verified trailing zero bytes, Track 02 tests inserting N zero PCM bytes. Every repair must verify CRC32/MD5."/>
-              <CheckBox x:Name="FindCrcsSavePartialCheckBox" Content="Save partial files for manual inspection ⓘ" IsChecked="False" IsEnabled="True" VerticalAlignment="Center" ToolTip.Tip="With a CUE, save bounded partial candidates for unmatched AUDIO tracks when reliable neighbouring/edge anchors exist. Without a CUE, the same option is available for the safe two-target singleton case when exactly one ordinary target matches."/>
+              <CheckBox x:Name="FindCrcsEdgeRepairCheckBox" Content="Attempt to fix under-dumped Audio edges" IsChecked="False" IsEnabled="True" VerticalAlignment="Center" Margin="0,0,18,0"/>
+              <CheckBox x:Name="FindCrcsPregapScrambleCheckBox" Content="Scramble Track 2 pregap data sectors if present" IsChecked="False" IsEnabled="False" VerticalAlignment="Center" Margin="0,0,18,0"/>
+              <CheckBox x:Name="FindCrcsSavePartialCheckBox" Content="Save partial files for manual inspection" IsChecked="False" IsEnabled="True" VerticalAlignment="Center"/>
             </WrapPanel>
           </StackPanel>
           <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
@@ -58,7 +58,7 @@
       <TabItem.Header><StackPanel Orientation="Horizontal" Spacing="6"><PathIcon Width="16" Height="16" Data="M9,4 V15.5 C8.3,15.2 7.5,15 6.7,15 C4.7,15 3,16.1 3,17.5 C3,18.9 4.7,20 6.7,20 C8.7,20 10,18.9 10,17.5 V8 L18,6 V13.5 C17.3,13.2 16.5,13 15.7,13 C13.7,13 12,14.1 12,15.5 C12,16.9 13.7,18 15.7,18 C17.7,18 19,16.9 19,15.5 V3 Z"/><TextBlock Text="Audio" VerticalAlignment="Center"/></StackPanel></TabItem.Header>
       <Grid Margin="12" RowDefinitions="Auto,150,Auto,Auto,*,Auto,150" RowSpacing="8">
         <StackPanel Grid.Row="0" Spacing="6">
-          <TextBlock Text="Audio / raw PCM sources ⓘ" FontWeight="SemiBold" ToolTip.Tip="Lossless audio must decode exactly to 44.1 kHz, 16-bit stereo. BIN and ISO are accepted as raw byte streams and are used directly with no decoding or conversion. Files are joined in the order shown; source boundaries do not constrain recovered CD track boundaries."/>
+          <TextBlock Text="Audio / raw PCM sources" FontWeight="SemiBold"/>
           <WrapPanel Orientation="Horizontal">
             <Button x:Name="AudioAddButton" Content="Add audio / image..." Click="AudioAddButton_Click" Margin="0,0,6,6"/>
             <Button x:Name="AudioPlaylistButton" Content="Add playlist..." Click="AudioPlaylistButton_Click" Margin="0,0,6,6"/>
@@ -73,20 +73,20 @@
 
         <Grid Grid.Row="2" ColumnDefinitions="2*,*" ColumnSpacing="16">
           <StackPanel Grid.Column="0" Spacing="5">
-            <TextBlock Text="Output / working folder ⓘ" FontWeight="SemiBold" ToolTip.Tip="Recovered track BINs and intermediate decoded/combined working files are written here. Enable Delete working files after recovery to keep only matched track outputs."/>
+            <TextBlock Text="Output / working folder" FontWeight="SemiBold"/>
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
               <TextBox x:Name="AudioOutputFolderBox" Grid.Column="0" Watermark="Converted CDDA BINs, combined working stream and recovered Redump tracks are written here..."/>
               <Button x:Name="AudioOutputBrowseButton" Grid.Column="1" Click="AudioOutputBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
             </Grid>
           </StackPanel>
           <StackPanel Grid.Column="1" Spacing="5">
-            <TextBlock Text="Edge silence search (seconds) ⓘ" FontWeight="SemiBold" ToolTip.Tip="Zero PCM is searched before the first source and after the last. Matching is aligned to one stereo sample frame (4 bytes), not to 2352-byte CD sectors."/>
+            <TextBlock Text="Edge silence search (seconds)" FontWeight="SemiBold"/>
             <TextBox x:Name="AudioEdgeSecondsBox" Text="5" Watermark="5"/>
           </StackPanel>
         </Grid>
 
         <Grid Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-          <TextBlock Grid.Column="0" Text="Redump audio-track hashes ⓘ" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="Paste a redump.info disc URL or numeric disc ID to import the audio-track filenames/hashes and CUE automatically, or paste the same Redump SIZE / CRC32 / MD5 rows accepted by FindCRCs. The concatenated CDDA stream is searched sequentially and exact matches are extracted automatically."/>
+          <TextBlock Grid.Column="0" Text="Redump audio-track hashes" FontWeight="SemiBold" VerticalAlignment="Center"/>
           <Button x:Name="AudioHashClearButton" Grid.Column="1" Content="Clear hashes" Click="AudioHashClearButton_Click"/>
         </Grid>
 
@@ -99,10 +99,10 @@
             <Button x:Name="AudioClearSavedInputsButton" Grid.Column="3" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
           </Grid>
           <WrapPanel Grid.Row="1" Orientation="Horizontal">
-            <CheckBox x:Name="AudioEdgeRepairCheckBox" Content="Attempt to fix under-dumped segments with FindCRCs ⓘ" IsChecked="False" VerticalAlignment="Center" Margin="0,0,18,6" ToolTip.Tip="If track 1 or the final track does not match but its adjacent track does, use that match as an anchor to determine the missing start/end length. Digital silence is tried first; then Find-ends derives the missing CRC32 and searches the whole combined audio stream."/>
-            <CheckBox x:Name="AudioSavePartialCheckBox" Content="Save partial edge tracks ⓘ" IsChecked="False" VerticalAlignment="Center" Margin="0,0,18,6" ToolTip.Tip="For unmatched first/final tracks only, save the safest bounded .partial candidate when an adjacent verified track establishes the physical edge. This is independent of edge repair and is intended for manual inspection."/>
-            <CheckBox x:Name="AudioHeadsTailsCheckBox" Content="Heads and Tails mode ⓘ" IsChecked="False" IsVisible="False" VerticalAlignment="Center" Margin="0,0,18,6" ToolTip.Tip="Uses the configured AudioHeadsandTails.bin corpus for last-resort first/final track recovery. This option is only available when a Heads and Tails collection exists and the configured corpus file is present. Requires Attempt to fix under-dumped segments."/>
-            <CheckBox x:Name="AudioDeleteTempCheckBox" Content="Delete working files ⓘ" IsChecked="False" VerticalAlignment="Center" Margin="0,0,0,6" ToolTip.Tip="After recovery finishes, deletes converted .cdda.bin files and combined_cdda.bin. Original raw BIN/ISO sources are never deleted. Matched recovered tracks and saved edge .partial files are kept."/>
+            <CheckBox x:Name="AudioEdgeRepairCheckBox" Content="Attempt to fix under-dumped segments with FindCRCs" IsChecked="False" VerticalAlignment="Center" Margin="0,0,18,6"/>
+            <CheckBox x:Name="AudioSavePartialCheckBox" Content="Save partial edge tracks" IsChecked="False" VerticalAlignment="Center" Margin="0,0,18,6"/>
+            <CheckBox x:Name="AudioHeadsTailsCheckBox" Content="Heads and Tails mode" IsChecked="False" IsVisible="False" VerticalAlignment="Center" Margin="0,0,18,6"/>
+            <CheckBox x:Name="AudioDeleteTempCheckBox" Content="Delete working files" IsChecked="False" VerticalAlignment="Center" Margin="0,0,0,6"/>
           </WrapPanel>
           <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
             <ProgressBar x:Name="AudioProgressBar" Grid.Column="0" Minimum="0" Maximum="100" Height="18" VerticalAlignment="Center"/>
@@ -113,8 +113,8 @@
         <Grid Grid.Row="6" RowDefinitions="Auto,*" RowSpacing="5">
           <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
             <TextBlock Grid.Column="0" Text="Activity log" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <Button x:Name="AudioActivityLogButton" Grid.Column="1" Click="AudioActivityLogButton_Click" Padding="8,4" ToolTip.Tip="Hide or show the activity log"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="AudioActivityLogButtonText" Text="Hide"/></StackPanel></Button>
-            <Button x:Name="AudioLogDockButton" Grid.Column="2" Click="AudioLogDockButton_Click" Padding="8,4" ToolTip.Tip="Dock or undock the activity log"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="AudioLogDockButtonText" Text="Undock"/></StackPanel></Button>
+            <Button x:Name="AudioActivityLogButton" Grid.Column="1" Click="AudioActivityLogButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="AudioActivityLogButtonText" Text="Hide"/></StackPanel></Button>
+            <Button x:Name="AudioLogDockButton" Grid.Column="2" Click="AudioLogDockButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="AudioLogDockButtonText" Text="Undock"/></StackPanel></Button>
           </Grid>
           <Border x:Name="AudioLogPane" Grid.Row="1">
             <TextBox x:Name="AudioLogBox" AcceptsReturn="True" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="monospace" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto" TextAlignment="Left"/>
@@ -145,7 +145,7 @@
         </StackPanel>
 
         <StackPanel Grid.Row="2" Spacing="5">
-          <TextBlock Text="Optional XA metadata ⓘ" FontWeight="SemiBold" ToolTip.Tip="Supply a DIC *_EccEdc.txt or raw Redumper .skeleton to restore original per-sector Mode 2 XA File Number, Channel Number, Submode and Coding Info before EDC/ECC regeneration."/>
+          <TextBlock Text="Optional XA metadata" FontWeight="SemiBold"/>
           <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
             <TextBox x:Name="IsoXaMetadataBox" Grid.Column="0" Watermark="Use original Mode 2 XA subheaders instead of generic 00 00 08 00..."/>
             <Button x:Name="IsoXaMetadataBrowseButton" Grid.Column="1" Click="IsoXaMetadataBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
@@ -155,7 +155,7 @@
         </StackPanel>
 
         <StackPanel Grid.Row="3" Spacing="5">
-          <TextBlock Text="Optional Redump target ⓘ" FontWeight="SemiBold" ToolTip.Tip="Paste one Redump track/file entry containing filename, size, CRC32, MD5 and optional SHA-1. ISO-only conversion will pad missing cooked sectors with zeroes or ignore excess trailing cooked sectors so the resulting 2352-byte BIN has the target length, then verify its hashes."/>
+          <TextBlock Text="Optional Redump target" FontWeight="SemiBold"/>
           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
             <TextBox x:Name="IsoTargetBox" Grid.Column="0" Watermark="Paste one Redump target row, Redump disc URL, or disc ID..."/>
             <Button x:Name="IsoTargetClearButton" Grid.Column="1" Content="Clear" Click="IsoTargetClearButton_Click"/>
@@ -172,7 +172,7 @@
 
         <Grid Grid.Row="5" ColumnDefinitions="300,*" ColumnSpacing="16">
           <StackPanel Grid.Column="0" Spacing="5">
-            <TextBlock Text="ISO-only sector mode ⓘ" FontWeight="SemiBold" ToolTip.Tip="Used only for a cooked image without a CUE. When a CUE is supplied, its track types are authoritative."/>
+            <TextBlock Text="ISO-only sector mode" FontWeight="SemiBold"/>
             <ComboBox x:Name="IsoModeBox" SelectedIndex="0">
               <ComboBoxItem Content="Auto detect (XA marker; otherwise Mode 1)"/>
               <ComboBoxItem Content="Mode 1"/>
@@ -185,7 +185,7 @@
           </StackPanel>
         </Grid>
 
-        <TextBlock Grid.Row="6" Text="Conversion details ⓘ" Opacity="0.7" FontSize="12" ToolTip.Tip="With a CUE, all FILE entries are merged into one 2352-byte BIN. MODE1/2048 and MODE2/2048 tracks are expanded; AUDIO and already-raw 2352 tracks are copied. WAVE sources must be 44.1 kHz/16-bit/stereo PCM and only their data chunk is copied. Per-file INDEX times are rewritten to cumulative positions. MODE2/2048 uses generic XA Form 1 subheaders unless DIC EccEdc or Redumper skeleton metadata is supplied."/>
+        <TextBlock Grid.Row="6" Text="Conversion details" Opacity="0.7" FontSize="12"/>
 
         <Grid Grid.Row="7" RowDefinitions="Auto,Auto" RowSpacing="6">
           <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
@@ -235,7 +235,7 @@
         </Grid>
 
         <Grid Grid.Row="4" ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
-          <CheckBox x:Name="Mdf2BinSaveSubCheckBox" Grid.Column="0" Content="Also save 96-byte interleaved subchannel as .sub ⓘ" IsChecked="False" VerticalAlignment="Center" ToolTip.Tip="Only available when every represented MDF sector contains interleaved 96-byte subchannel data. DumpToolbox will not fabricate missing subchannel sectors."/>
+          <CheckBox x:Name="Mdf2BinSaveSubCheckBox" Grid.Column="0" Content="Also save 96-byte interleaved subchannel as .sub" IsChecked="False" VerticalAlignment="Center"/>
           <CheckBox x:Name="Mdf2BinSendToFindCrcsCheckBox" Grid.Column="1" Content="Use resulting BIN as FindCRCs source" IsChecked="False" VerticalAlignment="Center" Margin="12,0,0,0"/>
         </Grid>
 
@@ -286,7 +286,7 @@
         </Grid>
 
         <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
-          <CheckBox x:Name="Nrg2BinSaveSubCheckBox" Grid.Column="0" Content="Also save 96-byte subchannel as .sub ⓘ" IsChecked="False" VerticalAlignment="Center" ToolTip.Tip="When the NRG contains stored 2448-byte sectors, also save their 96-byte subchannel data to a companion .sub file. When disabled, only the 2352-byte main-channel BIN is written."/>
+          <CheckBox x:Name="Nrg2BinSaveSubCheckBox" Grid.Column="0" Content="Also save 96-byte subchannel as .sub" IsChecked="False" VerticalAlignment="Center"/>
           <CheckBox x:Name="Nrg2BinSendToFindCrcsCheckBox" Grid.Column="1" Content="Use resulting BIN as FindCRCs source" IsChecked="False" VerticalAlignment="Center" Margin="12,0,0,0"/>
         </Grid>
 
@@ -337,7 +337,7 @@
         </Grid>
 
         <Grid Grid.Row="3" ColumnDefinitions="Auto,Auto,*" ColumnSpacing="14">
-          <CheckBox x:Name="Cdi2BinSaveSubCheckBox" Grid.Column="0" Content="Also save 96-byte subchannel as .sub ⓘ" IsChecked="False" VerticalAlignment="Center" ToolTip.Tip="When the CDI contains stored 2448-byte P-W subchannel sectors, also save their 96-byte subchannel data to a companion .sub file. 2368-byte PQ-only data is not expanded to a .sub file."/>
+          <CheckBox x:Name="Cdi2BinSaveSubCheckBox" Grid.Column="0" Content="Also save 96-byte subchannel as .sub" IsChecked="False" VerticalAlignment="Center"/>
           <CheckBox x:Name="Cdi2BinSendToFindCrcsCheckBox" Grid.Column="1" Content="Use resulting BIN as FindCRCs source" IsChecked="False" VerticalAlignment="Center" Margin="12,0,0,0"/>
         </Grid>
 
@@ -373,7 +373,7 @@
         <!-- Keep all four selectors in one grid so labels, text boxes and Browse buttons
              share exactly the same columns. -->
         <Grid Grid.Row="0" ColumnDefinitions="180,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="Redumper skeleton ⓘ" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="Load a Redumper .skeleton with its matching .hash manifest. Source files are matched by SHA-1 rather than filename; raw 2352-byte skeleton sectors retain sync/MSF/mode/XA metadata and restored sectors have EDC/ECC regenerated."/>
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="Redumper skeleton" FontWeight="SemiBold" VerticalAlignment="Center"/>
           <TextBox x:Name="SkeletonPathBox" Grid.Row="0" Grid.Column="1" Watermark="Choose the .skeleton file..."/>
           <Button x:Name="SkeletonBrowseButton" Grid.Row="0" Grid.Column="2" Click="SkeletonBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
 
@@ -405,7 +405,7 @@
           <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
             <Button x:Name="SkeletonScanButton" Grid.Column="0" Content="Scan source folder" Click="SkeletonScanButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonScanImageButton" Grid.Column="1" Content="Scan source ISO/BIN" Click="SkeletonScanImageButton_Click" IsEnabled="False"/>
-            <Button x:Name="SkeletonCheckSha1DbButton" Grid.Column="2" Content="Check SHA-1 DB" Click="SkeletonCheckSha1DbButton_Click" IsEnabled="False" ToolTip.Tip="Match currently missing skeleton payloads against the configured SHA-1 catalogue database."/>
+            <Button x:Name="SkeletonCheckSha1DbButton" Grid.Column="2" Content="Check SHA-1 DB" Click="SkeletonCheckSha1DbButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonResurrectButton" Grid.Column="3" Content="Resurrect" Click="SkeletonResurrectButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonCancelButton" Grid.Column="4" Content="Cancel" Click="SkeletonCancelButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonClearSavedInputsButton" Grid.Column="6" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
@@ -422,8 +422,8 @@
           <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
             <TextBlock Grid.Column="0" Text="ISO contents / match status" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             <TextBlock Grid.Column="1" Text="Activity log" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <Button x:Name="SkeletonActivityLogButton" Grid.Column="2" Click="SkeletonActivityLogButton_Click" Padding="8,4" ToolTip.Tip="Hide or show the activity log"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="SkeletonActivityLogButtonText" Text="Hide"/></StackPanel></Button>
-            <Button x:Name="SkeletonLogDockButton" Grid.Column="3" Click="SkeletonLogDockButton_Click" Padding="8,4" ToolTip.Tip="Dock or undock the activity log"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="SkeletonLogDockButtonText" Text="Undock"/></StackPanel></Button>
+            <Button x:Name="SkeletonActivityLogButton" Grid.Column="2" Click="SkeletonActivityLogButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="SkeletonActivityLogButtonText" Text="Hide"/></StackPanel></Button>
+            <Button x:Name="SkeletonLogDockButton" Grid.Column="3" Click="SkeletonLogDockButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="SkeletonLogDockButtonText" Text="Undock"/></StackPanel></Button>
           </Grid>
 
           <Grid x:Name="SkeletonWorkspaceGrid" Grid.Row="1" ColumnDefinitions="*,6,*">
@@ -453,7 +453,7 @@
           </Grid>
         </Grid>
 
-        <TextBlock Grid.Row="5" Text="Resurrection details ⓘ" Opacity="0.65" FontSize="11" ToolTip.Tip="Files are matched by SHA-1, not filename. Raw 2352-byte skeletons preserve original sync/MSF/mode/XA subheaders and restored sectors have EDC/ECC regenerated. Allow missing files leaves unmatched payloads as the skeleton data for partial recovery."/>
+        <TextBlock Grid.Row="5" Text="Resurrection details" Opacity="0.65" FontSize="11"/>
       </Grid>
     </TabItem>
 
@@ -461,7 +461,7 @@
       <TabItem.Header><StackPanel Orientation="Horizontal" Spacing="6"><PathIcon Width="16" Height="16" Data="M12,2 A10,10 0 1 0 12,22 A10,10 0 1 0 12,2 M12,8 A4,4 0 1 0 12,16 A4,4 0 1 0 12,8 M12,11 A1,1 0 1 0 12,13 A1,1 0 1 0 12,11"/><TextBlock Text="DIC" VerticalAlignment="Center"/></StackPanel></TabItem.Header>
       <Grid Margin="12" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" RowSpacing="8">
         <Grid Grid.Row="0" ColumnDefinitions="180,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="DiscImageCreator log folder ⓘ" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="Choose the folder containing one DiscImageCreator log set. DumpToolbox discovers the matching volDesc, disc, EccEdc, mainInfo, mainError and DAT companions automatically, then builds the synthetic skeleton. Recovery matches persist across sessions and multiple source folders."/>
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="DiscImageCreator log folder" FontWeight="SemiBold" VerticalAlignment="Center"/>
           <TextBox x:Name="DicLogPathBox" Grid.Row="0" Grid.Column="1" Watermark="Choose the folder containing the DiscImageCreator log set..."/>
           <Button x:Name="DicLogBrowseButton" Grid.Row="0" Grid.Column="2" Click="DicLogBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
 
@@ -482,7 +482,7 @@
           <Button x:Name="DicLoadButton" Grid.Column="0" Content="Load DIC logs" Click="DicLoadButton_Click"/>
           <Button x:Name="DicClearStateButton" Grid.Column="1" Content="Clear saved matches" Click="DicClearStateButton_Click" IsEnabled="False"/>
           <CheckBox x:Name="DicAllowMissingCheckBox" Grid.Column="2" Content="Allow missing files" IsChecked="False" VerticalAlignment="Center"/>
-          <CheckBox x:Name="DicForceRehashCheckBox" Grid.Column="3" IsChecked="False" VerticalAlignment="Center" ToolTip.Tip="Before loading the selected DIC log set, delete its saved recovery-state JSON and donor cache so failed or stale previous runs cannot be reused. DIC folder matching itself is path/size based rather than SHA-1 cached; this option forces a clean DIC recovery session."><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M17.7,6.3 C16.2,4.9 14.2,4 12,4 C7.6,4 4,7.6 4,12 C4,16.4 7.6,20 12,20 C15.7,20 18.8,17.5 19.7,14 H17.6 C16.8,16.3 14.6,18 12,18 C8.7,18 6,15.3 6,12 C6,8.7 8.7,6 12,6 C13.7,6 15.2,6.7 16.3,7.7 L13,11 H21 V3 Z"/><TextBlock Text="Force rehash / clear cache ⓘ"/></StackPanel></CheckBox>
+          <CheckBox x:Name="DicForceRehashCheckBox" Grid.Column="3" IsChecked="False" VerticalAlignment="Center"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M17.7,6.3 C16.2,4.9 14.2,4 12,4 C7.6,4 4,7.6 4,12 C4,16.4 7.6,20 12,20 C15.7,20 18.8,17.5 19.7,14 H17.6 C16.8,16.3 14.6,18 12,18 C8.7,18 6,15.3 6,12 C6,8.7 8.7,6 12,6 C13.7,6 15.2,6.7 16.3,7.7 L13,11 H21 V3 Z"/><TextBlock Text="Force rehash / clear cache"/></StackPanel></CheckBox>
           <Button x:Name="DicClearSavedInputsButton" Grid.Column="5" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
         </Grid>
 
@@ -505,9 +505,9 @@
           <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
             <TextBlock Grid.Column="0" Text="DIC filesystem / match status" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             <TextBlock Grid.Column="1" Text="Activity log" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <CheckBox x:Name="DicVerboseLoggingCheckBox" Grid.Column="2" Content="Verbose" IsChecked="False" VerticalAlignment="Center" ToolTip.Tip="Log detailed DIC record, manifest and source-match diagnostics. Useful for investigating unusual discs; produces substantially more log output."/>
-            <Button x:Name="DicActivityLogButton" Grid.Column="3" Click="DicActivityLogButton_Click" Padding="8,4" ToolTip.Tip="Hide or show the activity log"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="DicActivityLogButtonText" Text="Hide"/></StackPanel></Button>
-            <Button x:Name="DicLogDockButton" Grid.Column="4" Click="DicLogDockButton_Click" Padding="8,4" ToolTip.Tip="Dock or undock the activity log"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="DicLogDockButtonText" Text="Undock"/></StackPanel></Button>
+            <CheckBox x:Name="DicVerboseLoggingCheckBox" Grid.Column="2" Content="Verbose" IsChecked="False" VerticalAlignment="Center"/>
+            <Button x:Name="DicActivityLogButton" Grid.Column="3" Click="DicActivityLogButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="DicActivityLogButtonText" Text="Hide"/></StackPanel></Button>
+            <Button x:Name="DicLogDockButton" Grid.Column="4" Click="DicLogDockButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="DicLogDockButtonText" Text="Undock"/></StackPanel></Button>
           </Grid>
 
           <Grid x:Name="DicWorkspaceGrid" Grid.Row="1" ColumnDefinitions="*,6,*">
@@ -533,7 +533,7 @@
           </Grid>
         </Grid>
 
-        <TextBlock Grid.Row="5" Text="DIC recovery details ⓘ" Opacity="0.65" FontSize="11" ToolTip.Tip="DIC recovery keeps the logged primary ISO9660 filesystem authoritative. Normal source folders may use the user-visible Joliet names/tree: exact primary paths are tried first, then a conservative Joliet-to-ISO9660 8.3 projection plus exact byte length is accepted only when unique. Those validated source names can rebuild otherwise-unlogged Joliet directory/path-table metadata without changing primary ISO extents. Donor ISO/BIN scans still use the primary ISO9660 filesystem and may supply exact raw metadata/regions."/>
+        <TextBlock Grid.Row="5" Text="DIC recovery details" Opacity="0.65" FontSize="11"/>
       </Grid>
     </TabItem>
 
@@ -553,11 +553,11 @@
           <TextBox x:Name="IrdOutputBox" Grid.Row="2" Grid.Column="1" Watermark="Plain ISO, or encrypted ISO when encryption is enabled..."/>
           <Button x:Name="IrdOutputBrowseButton" Grid.Row="2" Grid.Column="2" Click="IrdOutputBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
 
-          <TextBlock Grid.Row="3" Grid.Column="0" Text="Disc key file" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="Optional when encryption is disabled. Accepts a 16-byte binary .key file or a text .key/.txt containing 32 hexadecimal characters."/>
+          <TextBlock Grid.Row="3" Grid.Column="0" Text="Disc key file" FontWeight="SemiBold" VerticalAlignment="Center"/>
           <TextBox x:Name="IrdKeyFileBox" Grid.Row="3" Grid.Column="1" Watermark="Optional .key or .txt file containing the 16-byte PS3 disc key..."/>
           <Button x:Name="IrdKeyBrowseButton" Grid.Row="3" Grid.Column="2" Click="IrdKeyBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
 
-          <TextBlock Grid.Row="4" Grid.Column="0" Text="Disc key (hex)" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="Optional 32-character hexadecimal disc key. If entered, this overrides the selected key file."/>
+          <TextBlock Grid.Row="4" Grid.Column="0" Text="Disc key (hex)" FontWeight="SemiBold" VerticalAlignment="Center"/>
           <TextBox x:Name="IrdKeyTextBox" Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" FontFamily="monospace" MaxLength="34" Watermark="32 hexadecimal characters; overrides the key file..."/>
         </Grid>
 
@@ -568,7 +568,7 @@
             <Button x:Name="IrdVerifyButton" Grid.Column="0" Content="Verify source files" Click="IrdVerifyButton_Click"/>
             <Button x:Name="IrdRebuildButton" Grid.Column="1" Content="Rebuild ISO" Click="IrdRebuildButton_Click" IsEnabled="False"/>
             <Button x:Name="IrdCancelButton" Grid.Column="2" Content="Cancel" Click="IrdCancelButton_Click" IsEnabled="False"/>
-            <CheckBox x:Name="IrdEncryptCheckBox" Grid.Column="3" Content="Encrypt rebuilt ISO with disc key" IsChecked="False" VerticalAlignment="Center" ToolTip.Tip="Rebuild a temporary plain ISO, encrypt only the PS3 encrypted regions with the supplied 16-byte disc key, verify all IRD region hashes, then keep the encrypted ISO as the selected output."/>
+            <CheckBox x:Name="IrdEncryptCheckBox" Grid.Column="3" Content="Encrypt rebuilt ISO with disc key" IsChecked="False" VerticalAlignment="Center"/>
             <Button x:Name="IrdClearSavedInputsButton" Grid.Column="5" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
           </Grid>
           <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
@@ -581,8 +581,8 @@
           <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
             <TextBlock Grid.Column="0" Text="PS3 disc contents / source status" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             <TextBlock Grid.Column="1" Text="Activity log" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            <Button x:Name="IrdActivityLogButton" Grid.Column="2" Click="IrdActivityLogButton_Click" Padding="8,4" ToolTip.Tip="Hide or show the activity log"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="IrdActivityLogButtonText" Text="Hide"/></StackPanel></Button>
-            <Button x:Name="IrdLogDockButton" Grid.Column="3" Click="IrdLogDockButton_Click" Padding="8,4" ToolTip.Tip="Dock or undock the activity log"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="IrdLogDockButtonText" Text="Undock"/></StackPanel></Button>
+            <Button x:Name="IrdActivityLogButton" Grid.Column="2" Click="IrdActivityLogButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="IrdActivityLogButtonText" Text="Hide"/></StackPanel></Button>
+            <Button x:Name="IrdLogDockButton" Grid.Column="3" Click="IrdLogDockButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="IrdLogDockButtonText" Text="Undock"/></StackPanel></Button>
           </Grid>
 
           <Grid x:Name="IrdWorkspaceGrid" Grid.Row="1" ColumnDefinitions="*,6,*">
@@ -618,7 +618,7 @@
       <Grid Margin="12" RowDefinitions="Auto,*,Auto,Auto,Auto,190" RowSpacing="8">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="12">
           <StackPanel Grid.Column="0" Spacing="3">
-            <TextBlock Text="Source files ⓘ" FontWeight="SemiBold" ToolTip.Tip="Files are appended in the order shown below."/>
+            <TextBlock Text="Source files" FontWeight="SemiBold"/>
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Bottom">
             <Button x:Name="ConcatAddButton" Content="Add files..." Click="ConcatAddButton_Click"/>
@@ -642,7 +642,7 @@
         <Grid Grid.Row="3" ColumnDefinitions="Auto,130,Auto" ColumnSpacing="8">
           <CheckBox x:Name="ConcatPaddingCheckBox" Grid.Column="0" Content="Zero padding between files" VerticalAlignment="Center"/>
           <TextBox x:Name="ConcatPaddingBytesBox" Grid.Column="1" Text="10240" Watermark="Bytes" VerticalContentAlignment="Center"/>
-          <CheckBox x:Name="ConcatBoundaryCheckBox" Grid.Column="2" Content="Skip unsafe boundaries ⓘ" IsChecked="True" VerticalAlignment="Center" ToolTip.Tip="Checks up to 4096 bytes at each edge and requires 256 consecutive zero bytes on either side. If that safety test fails, padding is skipped."/>
+          <CheckBox x:Name="ConcatBoundaryCheckBox" Grid.Column="2" Content="Skip unsafe boundaries" IsChecked="True" VerticalAlignment="Center"/>
         </Grid>
 
         <Grid Grid.Row="4" RowDefinitions="Auto,Auto" RowSpacing="6">
@@ -676,7 +676,7 @@
             </StackPanel>
 
             <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="14">
-              <TextBlock Grid.Column="0" Text="Hashes ⓘ" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="CRC32, MD5 and SHA-1 are selected by default. Optional SHA-2 hashes are calculated in the same single pass over the file."/>
+              <TextBlock Grid.Column="0" Text="Hashes" FontWeight="SemiBold" VerticalAlignment="Center"/>
               <CheckBox x:Name="HashCalcCrc32CheckBox" Grid.Column="1" Content="CRC32" IsChecked="True" VerticalAlignment="Center"/>
               <CheckBox x:Name="HashCalcMd5CheckBox" Grid.Column="2" Content="MD5" IsChecked="True" VerticalAlignment="Center"/>
               <CheckBox x:Name="HashCalcSha1CheckBox" Grid.Column="3" Content="SHA-1" IsChecked="True" VerticalAlignment="Center"/>
@@ -719,7 +719,6 @@
                 <ComboBoxItem Content="String"/>
                 <ComboBoxItem Content="File"/>
               </ComboBox>
-              <TextBlock Grid.Column="4" Text="ⓘ" Margin="4,0,0,0" VerticalAlignment="Center" ToolTip.Tip="String mode encodes and decodes UTF-8 text. File mode streams arbitrary binary files to Base64 text files, or decodes Base64 text files back to binary without loading the whole file into memory."/>
             </Grid>
 
             <Grid Grid.Row="1">
@@ -763,7 +762,7 @@
         <TabItem Header="Find-Ends">
           <Grid Margin="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" RowSpacing="8">
             <Grid Grid.Row="0" ColumnDefinitions="165,*,Auto" ColumnSpacing="8">
-              <TextBlock Grid.Column="0" Text="Partial file ⓘ" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="The incomplete file. It must be shorter than the known complete length and may be missing bytes from either the beginning or the end."/>
+              <TextBlock Grid.Column="0" Text="Partial file" FontWeight="SemiBold" VerticalAlignment="Center"/>
               <TextBox x:Name="FindEndsPartialBox" Grid.Column="1" Watermark="Choose the partial file..."/>
               <Button x:Name="FindEndsPartialBrowseButton" Grid.Column="2" Click="FindEndsPartialBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
             </Grid>
@@ -778,12 +777,12 @@
             </Grid>
 
             <Grid Grid.Row="2" ColumnDefinitions="165,*" ColumnSpacing="8">
-              <TextBlock Grid.Column="0" Text="Full-file target ⓘ" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="Paste one Redump track/file entry, or the compact form: SIZE CRC32 MD5. SHA-1 and extra Redump columns are accepted but are not required by Find-ends."/>
+              <TextBlock Grid.Column="0" Text="Full-file target" FontWeight="SemiBold" VerticalAlignment="Center"/>
               <TextBox x:Name="FindEndsTargetBox" Grid.Column="1" Watermark="e.g. Track 01 ... 27807696 e6d860cb c36112ccde54f481bd52886cd31b8b01  or  27807696 e6d860cb c36112ccde54f481bd52886cd31b8b01" FontFamily="monospace"/>
             </Grid>
 
             <Grid Grid.Row="3" ColumnDefinitions="165,*,Auto,Auto" ColumnSpacing="8">
-              <TextBlock Grid.Column="0" Text="Optional source file ⓘ" FontWeight="SemiBold" VerticalAlignment="Center" ToolTip.Tip="If supplied, Find-ends searches every byte offset for the calculated missing-size/CRC32 block. CRC candidates are rebuilt with the partial file and accepted only when the complete MD5 matches."/>
+              <TextBlock Grid.Column="0" Text="Optional source file" FontWeight="SemiBold" VerticalAlignment="Center"/>
               <TextBox x:Name="FindEndsSourceBox" Grid.Column="1" Watermark="Optional file to search for the missing segment..."/>
               <Button x:Name="FindEndsSourceBrowseButton" Grid.Column="2" Click="FindEndsSourceBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
               <Button x:Name="FindEndsSourceClearButton" Grid.Column="3" Content="Clear" Click="FindEndsSourceClearButton_Click"/>
@@ -890,7 +889,7 @@
 
             <StackPanel Grid.Row="2" Spacing="8">
               <TextBlock Text="Paths" FontWeight="SemiBold" FontSize="15"/>
-              <CheckBox x:Name="SettingsRememberPathsCheckBox" Content="Remember last used paths" IsChecked="True" Click="SettingsRememberPathsCheckBox_Click" ToolTip.Tip="When enabled, DumpToolbox remembers path fields between sessions. Turning this off removes previously stored path values from DumpToolbox.ini; operational options are still remembered."/>
+              <CheckBox x:Name="SettingsRememberPathsCheckBox" Content="Remember last used paths" IsChecked="True" Click="SettingsRememberPathsCheckBox_Click"/>
             </StackPanel>
 
             <StackPanel Grid.Row="3" Spacing="8">
@@ -912,7 +911,7 @@
           <Grid x:Name="SettingsSha1CatalogueGrid" Margin="18" RowDefinitions="Auto,Auto,Auto,Auto,Auto,2*,Auto,*" RowSpacing="10">
             <StackPanel Grid.Row="0" Spacing="6">
               <TextBlock Text="Disc collection SHA-1 catalogue" FontWeight="SemiBold" FontSize="15"/>
-              <CheckBox x:Name="SettingsSha1DatabaseCheckBox" Content="Use SHA-1 catalogue in SkeleTool" IsChecked="True" Click="SettingsPreferenceChanged_Click" ToolTip.Tip="SkeleTool consults the independently scanned disc collection catalogue. Explicit local SkeleTool sources always take priority."/>
+              <CheckBox x:Name="SettingsSha1DatabaseCheckBox" Content="Use SHA-1 catalogue in SkeleTool" IsChecked="True" Click="SettingsPreferenceChanged_Click"/>
               <TextBlock Text="The catalogue is populated here from CD/DVD image collection folders." TextWrapping="Wrap" Opacity="0.75" MaxWidth="900" HorizontalAlignment="Left"/>
               <TextBlock x:Name="SettingsSha1DatabasePathText" TextWrapping="Wrap" Opacity="0.65"/>
             </StackPanel>
