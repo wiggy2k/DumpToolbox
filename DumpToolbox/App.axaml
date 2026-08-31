@@ -1,0 +1,78 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="DumpToolbox.App"
+             RequestedThemeVariant="Default">
+  <Application.Resources>
+    <SolidColorBrush x:Key="CustomThemeBackgroundBrush" Color="#202020"/>
+    <SolidColorBrush x:Key="CustomThemeTextBrush" Color="#F2F2F2"/>
+    <SolidColorBrush x:Key="CustomThemeAccentBrush" Color="#0078D4"/>
+    <SolidColorBrush x:Key="CustomThemeInputBrush" Color="#2B2B2B"/>
+  </Application.Resources>
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
+    <Style Selector="Window.custom-theme">
+      <Setter Property="Background" Value="{DynamicResource CustomThemeBackgroundBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme CheckBox">
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme RadioButton">
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme TextBox">
+      <Setter Property="Background" Value="{DynamicResource CustomThemeInputBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CustomThemeAccentBrush}"/>
+      <Setter Property="SelectionBrush" Value="{DynamicResource CustomThemeAccentBrush}"/>
+    </Style>
+
+    <Style Selector="Window.custom-theme Border.activity-log-surface">
+      <Setter Property="Background" Value="{DynamicResource CustomThemeInputBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CustomThemeAccentBrush}"/>
+    </Style>
+
+    <Style Selector="Window.custom-theme ListBox">
+      <Setter Property="Background" Value="{DynamicResource CustomThemeInputBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CustomThemeAccentBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme TreeView">
+      <Setter Property="Background" Value="{DynamicResource CustomThemeInputBrush}"/>
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CustomThemeAccentBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme TreeViewItem">
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme ComboBox">
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CustomThemeAccentBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme Button">
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CustomThemeAccentBrush}"/>
+    </Style>
+    <Style Selector="Window.custom-theme TabItem">
+      <Setter Property="Foreground" Value="{DynamicResource CustomThemeTextBrush}"/>
+    </Style>
+
+    <Style Selector="Button.icon-button">
+      <Setter Property="Width" Value="36"/>
+      <Setter Property="MinWidth" Value="36"/>
+      <Setter Property="Padding" Value="6"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="ScrollBar:vertical">
+      <Setter Property="Width" Value="16"/>
+    </Style>
+    <Style Selector="ScrollBar:horizontal">
+      <Setter Property="Height" Value="16"/>
+    </Style>
+  </Application.Styles>
+</Application>

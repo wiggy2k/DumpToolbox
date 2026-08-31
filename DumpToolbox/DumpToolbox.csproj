@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>DumpToolbox</AssemblyName>
+    <RootNamespace>DumpToolbox</RootNamespace>
+    <Product>DumpToolbox</Product>
+    <Version>0.8.98</Version>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Distribution invariant: framework-dependent .NET 8 single-file publish. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.13" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.13" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.13" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DumpToolbox.Core\DumpToolbox.Core.csproj" />
+  </ItemGroup>
+</Project>

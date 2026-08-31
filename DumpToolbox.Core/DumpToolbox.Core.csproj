@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>DumpToolbox.Core</RootNamespace>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="EOFSlackRules.default.ini" LogicalName="DumpToolbox.Core.EOFSlackRules.default.ini" />
+    <EmbeddedResource Include="JolietNamingRules.default.ini" LogicalName="DumpToolbox.Core.JolietNamingRules.default.ini" />
+    <EmbeddedResource Include="CDTV.TM" LogicalName="DumpToolbox.Core.CDTV.TM" />
+    <EmbeddedResource Include="CD32.TM" LogicalName="DumpToolbox.Core.CD32.TM" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.12" />
+    <PackageReference Include="SharpCompress" Version="0.50.4" />
+  </ItemGroup>
+</Project>
