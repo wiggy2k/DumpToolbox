@@ -2,8 +2,21 @@
 **/bin/
 **/obj/
 .vs/
+.idea/
+.vscode/
 *.user
 *.suo
+
+# Generated project output, test results and packages
+/outputs/
+/artifacts/
+**/TestResults/
+**/coverage/
+*.coverage
+*.coveragexml
+coverage*.xml
+*.nupkg
+*.snupkg
 
 # User settings and editable runtime rule copies
 DumpToolbox.ini
@@ -26,6 +39,12 @@ JolietNamingRules.ini
 *.partial
 *.partialdata
 *.tmp
+*.zerotest
+*.shortpadscan
+*.shortpadshift
+*.silenceshift
+*.trimtest
+.dumptoolbox_audio_search.bin
 
 # OS metadata
 .DS_Store
