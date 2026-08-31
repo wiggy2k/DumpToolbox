@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DumpToolbox.Core", "DumpToo
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DumpToolbox", "DumpToolbox\DumpToolbox.csproj", "{BD5E61B4-BC61-4C15-A928-D9907AA5058B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DumpToolbox.Core.Tests", "DumpToolbox.Core.Tests\DumpToolbox.Core.Tests.csproj", "{50701376-5117-4713-AEC9-A4B5B3FA42CB}"
+EndProject
 Global
     GlobalSection(SolutionConfigurationPlatforms) = preSolution
         Debug|Any CPU = Debug|Any CPU
@@ -20,5 +22,9 @@ Global
         {BD5E61B4-BC61-4C15-A928-D9907AA5058B}.Debug|Any CPU.Build.0 = Debug|Any CPU
         {BD5E61B4-BC61-4C15-A928-D9907AA5058B}.Release|Any CPU.ActiveCfg = Release|Any CPU
         {BD5E61B4-BC61-4C15-A928-D9907AA5058B}.Release|Any CPU.Build.0 = Release|Any CPU
+        {50701376-5117-4713-AEC9-A4B5B3FA42CB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {50701376-5117-4713-AEC9-A4B5B3FA42CB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {50701376-5117-4713-AEC9-A4B5B3FA42CB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {50701376-5117-4713-AEC9-A4B5B3FA42CB}.Release|Any CPU.Build.0 = Release|Any CPU
     EndGlobalSection
 EndGlobal
