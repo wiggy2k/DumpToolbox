@@ -28,12 +28,13 @@ public partial class MainWindow
     }
 
     private void AppendAudioHeadsTailsLog(string message)
+        => AppendAudioHeadsTailsLogBatch(new[] { message });
+
+    private void AppendAudioHeadsTailsLogBatch(IReadOnlyList<string> messages)
     {
-        string line = $"[{DateTime.Now:HH:mm:ss}] {message}";
-        if (_audioHeadsTailsLogText.Length > 0) _audioHeadsTailsLogText.AppendLine();
-        _audioHeadsTailsLogText.Append(line);
-        SettingsHeadsTailsLogTextBox.Text = _audioHeadsTailsLogText.ToString();
-        SettingsHeadsTailsLogTextBox.CaretIndex = SettingsHeadsTailsLogTextBox.Text?.Length ?? 0;
+        string text = UiLogText.AppendTimestamped(_audioHeadsTailsLogText, messages);
+        SettingsHeadsTailsLogTextBox.Text = text;
+        SettingsHeadsTailsLogTextBox.CaretIndex = text.Length;
     }
 
     private void SettingsHeadsTailsLogClearButton_Click(object? sender, RoutedEventArgs e)
@@ -46,7 +47,7 @@ public partial class MainWindow
     {
         try
         {
-            IReadOnlyList<AudioHeadsTailsRoot> roots = await _audioHeadsTailsCatalogueService.GetRootsAsync();
+            IReadOnlyList<AudioHeadsTailsRoot> roots = await Task.Run(() => _audioHeadsTailsCatalogueService.GetRootsAsync());
             bool corpusAvailable = IsAudioHeadsTailsCorpusAvailable(out string? configuredCorpusPath);
             string corpusDisplay = string.IsNullOrWhiteSpace(configuredCorpusPath)
                 ? "not configured in DumpToolbox.ini"
@@ -92,7 +93,7 @@ public partial class MainWindow
                 var remove = new Button { Content = "Remove folder", Padding = new Avalonia.Thickness(12, 6) };
                 remove.Click += async (_, _) =>
                 {
-                    await _audioHeadsTailsCatalogueService.DeactivateRootAsync(root.Id);
+                    await Task.Run(() => _audioHeadsTailsCatalogueService.DeactivateRootAsync(root.Id));
                     AppendAudioHeadsTailsLog($"Collection removed from catalogue: {root.Path}. The Heads and Tails corpus is append-only, so bytes already written by this collection are not rewritten or deleted.");
                     await RefreshAudioHeadsTailsRootsAsync();
                 };
@@ -153,7 +154,7 @@ public partial class MainWindow
         if (folders.Count == 0 || folders[0].TryGetLocalPath() is not { } path) return;
         try
         {
-            long id = await _audioHeadsTailsCatalogueService.AddRootAsync(path);
+            long id = await Task.Run(() => _audioHeadsTailsCatalogueService.AddRootAsync(path));
             await RefreshAudioHeadsTailsRootsAsync();
             await RunAudioHeadsTailsScanAsync(new[] { id });
         }
@@ -162,7 +163,7 @@ public partial class MainWindow
 
     private async void SettingsHeadsTailsCheckAllButton_Click(object? sender, RoutedEventArgs e)
     {
-        IReadOnlyList<AudioHeadsTailsRoot> roots = await _audioHeadsTailsCatalogueService.GetRootsAsync();
+        IReadOnlyList<AudioHeadsTailsRoot> roots = await Task.Run(() => _audioHeadsTailsCatalogueService.GetRootsAsync());
         await RunAudioHeadsTailsScanAsync(roots.Select(r => r.Id).ToArray());
     }
 
@@ -186,21 +187,24 @@ public partial class MainWindow
         SettingsHeadsTailsCancelButton.IsEnabled = true;
         SettingsHeadsTailsProgressBar.Value = 0;
         AudioHeadsTailsCorpusWriterSession? corpusSession = null;
+        UiBatchedLogProgress? logProgress = null;
         try
         {
             AppendAudioHeadsTailsLog($"=== Heads and Tails collection scan started ({rootIds.Count} folder(s), {workers} thread(s)) ===");
             AppendAudioHeadsTailsLog($"Corpus output: {corpusPath}");
-            var logProgress = new Progress<string>(AppendAudioHeadsTailsLog);
+            logProgress = new UiBatchedLogProgress(AppendAudioHeadsTailsLogBatch);
 
-            corpusSession = await _audioHeadsTailsCatalogueService.BeginCorpusScanAsync(
-                corpusPath, rootIds, logProgress, _audioHeadsTailsCts.Token);
+            corpusSession = await Task.Run(
+                () => _audioHeadsTailsCatalogueService.BeginCorpusScanAsync(
+                    corpusPath, rootIds, logProgress, _audioHeadsTailsCts.Token),
+                _audioHeadsTailsCts.Token);
             AudioHeadsTailsCorpusWriterSession activeCorpus = corpusSession;
             AppendAudioHeadsTailsLog("CORPUS: append-only output is open; only new/changed sources will append bytes. Unchanged sources never rewrite their existing heads/tails.");
 
             for (int rootIndex = 0; rootIndex < rootIds.Count; rootIndex++)
             {
                 int ordinal = rootIndex;
-                var progress = new Progress<AudioHeadsTailsProgress>(p =>
+                using var progress = new UiLatestProgress<AudioHeadsTailsProgress>(p =>
                 {
                     double inside = p.SourcesTotal <= 0 ? 0 : (double)p.SourcesProcessed / p.SourcesTotal;
                     SettingsHeadsTailsProgressBar.Value = ((ordinal + inside) / rootIds.Count) * 100.0;
@@ -214,7 +218,8 @@ public partial class MainWindow
             }
 
             AppendAudioHeadsTailsLog("CORPUS: all scan workers finished; draining the writer queue and flushing the configured file.");
-            await activeCorpus.CompleteAsync(_audioHeadsTailsCts.Token);
+            await Task.Run(() => activeCorpus.CompleteAsync(_audioHeadsTailsCts.Token), _audioHeadsTailsCts.Token);
+            logProgress.Flush();
             SettingsHeadsTailsProgressBar.Value = 100;
             if (File.Exists(corpusPath))
             {
@@ -230,26 +235,31 @@ public partial class MainWindow
         }
         catch (OperationCanceledException)
         {
+            logProgress?.Flush();
             SettingsHeadsTailsStatusText.Text = "Scan cancelled.";
             AppendAudioHeadsTailsLog("CANCELLED: already-appended corpus bytes and committed processing metadata are retained. SQLite stores no audio bytes, so no corpus rebuild is performed.");
             if (corpusSession is not null)
             {
-                try { await corpusSession.CompleteAsync(); } catch { }
-                await corpusSession.DisposeAsync();
+                try { await Task.Run(() => corpusSession.CompleteAsync()); } catch { }
+                AudioHeadsTailsCorpusWriterSession cancelledSession = corpusSession;
+                await Task.Run(async () => await cancelledSession.DisposeAsync());
                 corpusSession = null;
             }
         }
         catch (Exception ex)
         {
+            logProgress?.Flush();
             SettingsHeadsTailsStatusText.Text = "Scan failed.";
             AppendAudioHeadsTailsLog($"FATAL: {ex.Message}");
             await ShowMessageAsync("DumpToolbox — Heads and Tails", ex.Message);
         }
         finally
         {
+            logProgress?.Dispose();
             if (corpusSession is not null)
             {
-                try { await corpusSession.DisposeAsync(); } catch (Exception ex) { AppendAudioHeadsTailsLog($"WARNING: corpus writer close failed: {ex.Message}"); }
+                AudioHeadsTailsCorpusWriterSession completedSession = corpusSession;
+                try { await Task.Run(async () => await completedSession.DisposeAsync()); } catch (Exception ex) { AppendAudioHeadsTailsLog($"WARNING: corpus writer close failed: {ex.Message}"); }
             }
             _audioHeadsTailsCts?.Dispose();
             _audioHeadsTailsCts = null;

@@ -50,7 +50,7 @@ internal static partial class RedumpDiscImportService
     public static async Task<RedumpDiscImportResult> ImportAsync(int discId, CancellationToken cancellationToken = default)
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("DumpToolbox", "0.8.10"));
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("DumpToolbox", "0.8.99"));
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("(+https://redump.info/)"));
 
         string pageUrl = $"https://redump.info/disc/{discId}/";

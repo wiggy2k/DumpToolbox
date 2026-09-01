@@ -97,7 +97,9 @@ public sealed partial class EdgeRecoveryService
                         partialOffset: 0, partialLength: nextOffset,
                         missingMode: FindEndsMode.MissingStart,
                         expectedStart: expectedStart,
-                        outputRoot: outputRoot, savePartialOnFailure: true, activity: activity, messages: messages, cancellationToken: cancellationToken).ConfigureAwait(false);
+                        outputRoot: outputRoot, savePartialOnFailure: savePartialForInspection,
+                        activity: activity, messages: messages, cancellationToken: cancellationToken,
+                        partialTrim: AudioPartialTrim.LeadingZeroFrames).ConfigureAwait(false);
 
                     if (!updated[0].Found && enableHeadsTails)
                     {
@@ -138,7 +140,7 @@ public sealed partial class EdgeRecoveryService
                             source, inspectionStart, Math.Min(inspectionLength, targets[0].Size),
                             targets[0], 0, outputRoot, updated[0],
                             $"first-track extent bounded by verified target 2 start at {nextOffset:N0}",
-                            activity, messages, cancellationToken).ConfigureAwait(false);
+                            activity, messages, cancellationToken, AudioPartialTrim.LeadingZeroFrames).ConfigureAwait(false);
                     }
                 }
             }
@@ -165,7 +167,9 @@ public sealed partial class EdgeRecoveryService
                         partialOffset: expectedStart, partialLength: available,
                         missingMode: FindEndsMode.MissingEnd,
                         expectedStart: expectedStart,
-                        outputRoot: outputRoot, savePartialOnFailure: true, activity: activity, messages: messages, cancellationToken: cancellationToken).ConfigureAwait(false);
+                        outputRoot: outputRoot, savePartialOnFailure: savePartialForInspection,
+                        activity: activity, messages: messages, cancellationToken: cancellationToken,
+                        partialTrim: AudioPartialTrim.TrailingZeroFrames).ConfigureAwait(false);
 
                     if (!updated[last].Found && enableHeadsTails)
                     {
@@ -204,7 +208,7 @@ public sealed partial class EdgeRecoveryService
                             source, expectedStart, inspectionLength,
                             targets[last], last, outputRoot, updated[last],
                             $"final-track extent bounded by verified previous-track end at {expectedStart:N0} and source EOF at {sourceLength:N0}",
-                            activity, messages, cancellationToken).ConfigureAwait(false);
+                            activity, messages, cancellationToken, AudioPartialTrim.TrailingZeroFrames).ConfigureAwait(false);
                     }
                 }
             }
@@ -306,12 +310,10 @@ public sealed partial class EdgeRecoveryService
                 }
             }
 
-            if (!updated[only].Found && savePartialForInspection && hasExtent && extentLength > 0)
+            if (!updated[only].Found && savePartialForInspection)
             {
-                updated[only] = await SaveInspectionPartialAsync(
-                    source, extentStart, Math.Min(extentLength, targets[only].Size), targets[only], only, outputRoot, updated[only],
-                    $"singleton audio extent derived from {extentDescription}",
-                    activity, messages, cancellationToken).ConfigureAwait(false);
+                Report(activity, messages,
+                    $"EDGE: {TargetDisplayName(targets[only], only)} is the only mapped audio track, so no partial is saved: an adjacent matched AUDIO track is required as its anchor.");
             }
 
             if (!updated[only].Found && attemptRepair)
@@ -391,7 +393,10 @@ public sealed partial class EdgeRecoveryService
                 }
             }
 
-            if (!updated[current].Found && savePartialForInspection && extentLength > 0)
+            bool previousIsAudio = audio[audioPosition - 1] == previous;
+            bool nextIsAudio = audio[audioPosition + 1] == next;
+            if (!updated[current].Found && savePartialForInspection && extentLength > 0 &&
+                previousIsAudio && nextIsAudio)
             {
                 // When the bounded region is at least target-sized, save the
                 // forward interpretation.  If it is short, preserve the whole
@@ -427,6 +432,12 @@ public sealed partial class EdgeRecoveryService
                     }
                 }
             }
+            else if (!updated[current].Found && savePartialForInspection && extentLength > 0 &&
+                     (!previousIsAudio || !nextIsAudio))
+            {
+                Report(activity, messages,
+                    $"EDGE: no partial was saved for {TargetDisplayName(targets[current], current)} because both anchors are not adjacent AUDIO tracks.");
+            }
         }
 
         int first = audio[0];
@@ -442,7 +453,6 @@ public sealed partial class EdgeRecoveryService
             {
                 long? partialStart = null;
                 string boundaryDescription = "no earlier source boundary can be established safely";
-                bool dualAnchorPartialsSaved = false;
 
                 // The next AUDIO track is the authoritative end anchor for the
                 // first AUDIO track. The preceding target does not itself have
@@ -489,37 +499,6 @@ public sealed partial class EdgeRecoveryService
                     else if (partialStart is null)
                     {
                         boundaryDescription = "no earlier source boundary can be established safely";
-                    }
-                }
-
-                // For manual inspection, when both immediate anchors exist save
-                // BOTH target-sized hypotheses before attempting repair:
-                //   forward  = target.Size bytes beginning at the end of Track 01
-                //   backward = target.Size bytes ending at the start of Track 03
-                // These deliberately overlap the adjacent matched track when the
-                // gap between anchors is shorter than the target; that is the point
-                // of comparing the two possible boundary interpretations.
-                if (savePartialForInspection && first > 0 &&
-                    updated[first - 1].Found && updated[first - 1].Offset is long partialForwardAnchorOffset)
-                {
-                    long forwardInspectionStart = checked(partialForwardAnchorOffset + targets[first - 1].Size);
-                    long backwardInspectionStart = checked(nextAudioOffset - targets[first].Size);
-
-                    bool forwardSaved = await SaveInspectionPartialVariantAsync(
-                        source, forwardInspectionStart, targets[first], first, outputRoot, "forward",
-                        $"target-sized forward hypothesis beginning immediately after matched {TargetDisplayName(targets[first - 1], first - 1)}",
-                        activity, messages, cancellationToken).ConfigureAwait(false);
-
-                    bool backwardSaved = await SaveInspectionPartialVariantAsync(
-                        source, backwardInspectionStart, targets[first], first, outputRoot, "backward",
-                        $"target-sized backward hypothesis ending immediately before matched {TargetDisplayName(targets[nextAudio], nextAudio)}",
-                        activity, messages, cancellationToken).ConfigureAwait(false);
-
-                    dualAnchorPartialsSaved = forwardSaved && backwardSaved;
-                    if (dualAnchorPartialsSaved)
-                    {
-                        Report(activity, messages,
-                            $"EDGE PARTIAL: both anchor hypotheses were saved for {TargetDisplayName(targets[first], first)} as .forward.partial and .backward.partial.");
                     }
                 }
 
@@ -581,16 +560,19 @@ public sealed partial class EdgeRecoveryService
                                 partialOffset: actualStart, partialLength: partialLength,
                                 missingMode: FindEndsMode.MissingStart,
                                 expectedStart: expectedStart,
-                                outputRoot: outputRoot, savePartialOnFailure: savePartialForInspection && !dualAnchorPartialsSaved,
+                                outputRoot: outputRoot, savePartialOnFailure: false,
                                 activity: activity, messages: messages,
-                                cancellationToken: cancellationToken).ConfigureAwait(false);
+                                cancellationToken: cancellationToken,
+                                partialTrim: AudioPartialTrim.LeadingZeroFrames).ConfigureAwait(false);
                         }
-                        else if (savePartialForInspection && !dualAnchorPartialsSaved)
+                        if (!updated[first].Found && savePartialForInspection)
                         {
+                            long inspectionStart = Math.Max(0, expectedStart);
+                            long inspectionLength = nextAudioOffset - inspectionStart;
                             updated[first] = await SaveInspectionPartialAsync(
-                                source, expectedStart, targets[first].Size, targets[first], first, outputRoot, updated[first],
-                                $"target-sized window immediately before matched {TargetDisplayName(targets[nextAudio], nextAudio)}",
-                                activity, messages, cancellationToken).ConfigureAwait(false);
+                                source, inspectionStart, inspectionLength, targets[first], first, outputRoot, updated[first],
+                                $"window anchored only to matched AUDIO {TargetDisplayName(targets[nextAudio], nextAudio)}",
+                                activity, messages, cancellationToken, AudioPartialTrim.LeadingZeroFrames).ConfigureAwait(false);
                         }
                     }
                     else if (expectedStart == actualStart &&
@@ -598,25 +580,25 @@ public sealed partial class EdgeRecoveryService
                     {
                         Report(activity, messages,
                             $"EDGE: {TargetDisplayName(targets[first], first)} is bounded exactly by matched {TargetDisplayName(targets[nextAudio], nextAudio)} and {boundaryDescription}, but the full target-sized region does not hash-match; this is not a missing-start length error.");
-                        if (savePartialForInspection && !dualAnchorPartialsSaved)
+                        if (savePartialForInspection)
                         {
                             updated[first] = await SaveInspectionPartialAsync(
                                 source, expectedStart, targets[first].Size, targets[first], first, outputRoot, updated[first],
-                                $"target-sized window immediately before matched {TargetDisplayName(targets[nextAudio], nextAudio)}",
-                                activity, messages, cancellationToken).ConfigureAwait(false);
+                                $"target-sized window anchored only to matched AUDIO {TargetDisplayName(targets[nextAudio], nextAudio)}",
+                                activity, messages, cancellationToken, AudioPartialTrim.LeadingZeroFrames).ConfigureAwait(false);
                         }
                     }
                     else
                     {
                         Report(activity, messages,
                             $"EDGE: {TargetDisplayName(targets[first], first)} is worked backwards from matched {TargetDisplayName(targets[nextAudio], nextAudio)}, but the resulting geometry does not prove a truncated audio prefix.");
-                        if (savePartialForInspection && !dualAnchorPartialsSaved &&
-                            actualStart >= 0 && actualStart <= nextAudioOffset && nextAudioOffset <= sourceLength && partialLength > 0)
+                        if (savePartialForInspection &&
+                            expectedStart >= 0 && expectedStart < nextAudioOffset && nextAudioOffset <= sourceLength)
                         {
                             updated[first] = await SaveInspectionPartialAsync(
                                 source, expectedStart, targets[first].Size, targets[first], first, outputRoot, updated[first],
-                                $"target-sized window immediately before matched {TargetDisplayName(targets[nextAudio], nextAudio)}",
-                                activity, messages, cancellationToken).ConfigureAwait(false);
+                                $"target-sized window anchored only to matched AUDIO {TargetDisplayName(targets[nextAudio], nextAudio)}",
+                                activity, messages, cancellationToken, AudioPartialTrim.LeadingZeroFrames).ConfigureAwait(false);
                         }
                     }
                 }
@@ -624,6 +606,15 @@ public sealed partial class EdgeRecoveryService
                 {
                     Report(activity, messages,
                         $"EDGE: {TargetDisplayName(targets[first], first)} can use matched {TargetDisplayName(targets[nextAudio], nextAudio)} as its end anchor, but {boundaryDescription}; a safe partial start cannot be established.");
+                    if (savePartialForInspection && nextAudioOffset > 0 && nextAudioOffset <= sourceLength)
+                    {
+                        long inspectionStart = Math.Max(0, nextAudioOffset - targets[first].Size);
+                        long inspectionLength = nextAudioOffset - inspectionStart;
+                        updated[first] = await SaveInspectionPartialAsync(
+                            source, inspectionStart, inspectionLength, targets[first], first, outputRoot, updated[first],
+                            $"window anchored only to matched AUDIO {TargetDisplayName(targets[nextAudio], nextAudio)}",
+                            activity, messages, cancellationToken, AudioPartialTrim.LeadingZeroFrames).ConfigureAwait(false);
+                    }
                 }
 
                 // Mixed-mode Track 02: a verified Track 03 is the primary anchor.
@@ -674,6 +665,7 @@ public sealed partial class EdgeRecoveryService
             else if (updated[previousAudio].Found && updated[previousAudio].Offset is long previousAudioOffset)
             {
                 long expectedStart = previousAudioOffset + targets[previousAudio].Size;
+                bool canSaveAudioAnchoredPartial = last == targets.Count - 1;
                 long? actualEnd = null;
                 string boundaryDescription;
                 if (last == targets.Count - 1)
@@ -708,16 +700,17 @@ public sealed partial class EdgeRecoveryService
                                     partialOffset: expectedStart, partialLength: available,
                                     missingMode: FindEndsMode.MissingEnd,
                                     expectedStart: expectedStart,
-                                    outputRoot: outputRoot, savePartialOnFailure: savePartialForInspection,
+                                    outputRoot: outputRoot, savePartialOnFailure: savePartialForInspection && canSaveAudioAnchoredPartial,
                                     activity: activity, messages: messages,
-                                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                                    cancellationToken: cancellationToken,
+                                    partialTrim: AudioPartialTrim.TrailingZeroFrames).ConfigureAwait(false);
                             }
-                            else if (savePartialForInspection)
+                            else if (savePartialForInspection && canSaveAudioAnchoredPartial)
                             {
                                 updated[last] = await SaveInspectionPartialAsync(
                                     source, expectedStart, targets[last].Size, targets[last], last, outputRoot, updated[last],
                                     $"bounded by matched {TargetDisplayName(targets[previousAudio], previousAudio)} and {boundaryDescription}",
-                                    activity, messages, cancellationToken).ConfigureAwait(false);
+                                    activity, messages, cancellationToken, AudioPartialTrim.TrailingZeroFrames).ConfigureAwait(false);
                             }
                         }
                         else if (available > targets[last].Size)
@@ -738,24 +731,24 @@ public sealed partial class EdgeRecoveryService
                                     $"EDGE: {TargetDisplayName(targets[last], last)} has {extra:N0} extra byte(s) before {boundaryDescription}, but they are not all zero PCM silence; no over-dump correction is attempted.");
                             }
 
-                            if (!updated[last].Found && savePartialForInspection)
+                            if (!updated[last].Found && savePartialForInspection && canSaveAudioAnchoredPartial)
                             {
                                 updated[last] = await SaveInspectionPartialAsync(
                                     source, expectedStart, targets[last].Size, targets[last], last, outputRoot, updated[last],
                                     $"bounded by matched {TargetDisplayName(targets[previousAudio], previousAudio)} and {boundaryDescription}",
-                                    activity, messages, cancellationToken).ConfigureAwait(false);
+                                    activity, messages, cancellationToken, AudioPartialTrim.TrailingZeroFrames).ConfigureAwait(false);
                             }
                         }
                         else
                         {
                             Report(activity, messages,
                                 $"EDGE: {TargetDisplayName(targets[last], last)} has exactly the target-sized amount of source data but did not hash-match; this is not an edge-length problem.");
-                            if (savePartialForInspection)
+                            if (savePartialForInspection && canSaveAudioAnchoredPartial)
                             {
                                 updated[last] = await SaveInspectionPartialAsync(
                                     source, expectedStart, targets[last].Size, targets[last], last, outputRoot, updated[last],
                                     $"bounded by matched {TargetDisplayName(targets[previousAudio], previousAudio)} and {boundaryDescription}",
-                                    activity, messages, cancellationToken).ConfigureAwait(false);
+                                    activity, messages, cancellationToken, AudioPartialTrim.TrailingZeroFrames).ConfigureAwait(false);
                             }
                         }
                     }
@@ -769,6 +762,11 @@ public sealed partial class EdgeRecoveryService
                 {
                     Report(activity, messages,
                         $"EDGE: {TargetDisplayName(targets[last], last)} is the last audio target, but {boundaryDescription}; a safe partial end cannot be established.");
+                }
+                if (savePartialForInspection && !canSaveAudioAnchoredPartial && !updated[last].Found)
+                {
+                    Report(activity, messages,
+                        $"EDGE: no partial was saved for {TargetDisplayName(targets[last], last)} because its outer boundary is a data track rather than disc EOF; audio partials require an adjacent AUDIO anchor and must not use a data-track boundary.");
                 }
             }
             else

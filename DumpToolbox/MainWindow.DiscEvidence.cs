@@ -30,17 +30,20 @@ public partial class MainWindow
     {
         try
         {
-            var s = await _discEvidenceService.GetQueueStatsAsync();
+            var s = await Task.Run(() => _discEvidenceService.GetQueueStatsAsync());
             DevEvidenceStatusText.Text = $"Pending catalogue units: {s.Pending:N0}; evidence units retained: {s.Complete:N0}";
         }
         catch (Exception ex) { DevEvidenceStatusText.Text = $"Evidence database error: {ex.Message}"; }
     }
 
     private void AppendDiscEvidenceLog(string message)
+        => AppendDiscEvidenceLogBatch(new[] { message });
+
+    private void AppendDiscEvidenceLogBatch(IReadOnlyList<string> messages)
     {
-        _discEvidenceLog.Append('[').Append(DateTime.Now.ToString("HH:mm:ss")).Append("] ").AppendLine(message);
-        DevEvidenceLogTextBox.Text = _discEvidenceLog.ToString();
-        DevEvidenceLogTextBox.CaretIndex = DevEvidenceLogTextBox.Text?.Length ?? 0;
+        string text = UiLogText.AppendTimestamped(_discEvidenceLog, messages);
+        DevEvidenceLogTextBox.Text = text;
+        DevEvidenceLogTextBox.CaretIndex = text.Length;
     }
 
     private async void DevEvidenceScanButton_Click(object? sender, RoutedEventArgs e)
@@ -51,20 +54,25 @@ public partial class MainWindow
         _userSettings?.Set("DevTools", "EvidenceThreads", workers); _userSettings?.Save();
         DevEvidenceScanButton.IsEnabled = false; DevEvidenceCancelButton.IsEnabled = true; DevEvidenceAnalyseButton.IsEnabled = false; DevEvidenceResetButton.IsEnabled = false;
         DevEvidenceProgressBar.Value = 0;
+        UiBatchedLogProgress? log = null;
         try
         {
-            var progress = new Progress<DiscEvidenceProgress>(p =>
+            using var progress = new UiLatestProgress<DiscEvidenceProgress>(p =>
             {
                 DevEvidenceProgressBar.Value = p.Total == 0 ? 100 : p.Completed * 100.0 / p.Total;
                 DevEvidenceStatusText.Text = $"{p.Phase}: {p.Completed:N0}/{p.Total:N0} units; {p.Images:N0} image(s); {p.Errors:N0} error(s)";
             });
-            var log = new Progress<string>(AppendDiscEvidenceLog);
-            await _discEvidenceService.ScanPendingAsync(workers, progress, log, _discEvidenceCts.Token);
+            log = new UiBatchedLogProgress(AppendDiscEvidenceLogBatch);
+            await Task.Run(
+                () => _discEvidenceService.ScanPendingAsync(workers, progress, log, _discEvidenceCts.Token),
+                _discEvidenceCts.Token);
+            log.Flush();
         }
-        catch (OperationCanceledException) { AppendDiscEvidenceLog("CANCELLED: completed evidence was retained; unfinished units remain pending."); }
-        catch (Exception ex) { AppendDiscEvidenceLog($"FATAL: {ex.GetType().Name}: {ex.Message}"); await ShowMessageAsync("DumpToolbox — Disc Evidence", ex.Message); }
+        catch (OperationCanceledException) { log?.Flush(); AppendDiscEvidenceLog("CANCELLED: completed evidence was retained; unfinished units remain pending."); }
+        catch (Exception ex) { log?.Flush(); AppendDiscEvidenceLog($"FATAL: {ex.GetType().Name}: {ex.Message}"); await ShowMessageAsync("DumpToolbox — Disc Evidence", ex.Message); }
         finally
         {
+            log?.Dispose();
             _discEvidenceCts.Dispose(); _discEvidenceCts = null;
             DevEvidenceScanButton.IsEnabled = true; DevEvidenceCancelButton.IsEnabled = false; DevEvidenceAnalyseButton.IsEnabled = true; DevEvidenceResetButton.IsEnabled = true;
             await RefreshDiscEvidenceStatusAsync();
@@ -77,13 +85,18 @@ public partial class MainWindow
     {
         IReadOnlyList<IStorageFolder> folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Choose evidence analysis output folder", AllowMultiple = false });
         string? path = folders.FirstOrDefault()?.TryGetLocalPath(); if (string.IsNullOrWhiteSpace(path)) return;
-        try { await _discEvidenceService.AnalyseAsync(path, new Progress<string>(AppendDiscEvidenceLog)); }
+        try
+        {
+            using var log = new UiBatchedLogProgress(AppendDiscEvidenceLogBatch);
+            await Task.Run(() => _discEvidenceService.AnalyseAsync(path, log));
+            log.Flush();
+        }
         catch (Exception ex) { await ShowMessageAsync("DumpToolbox — Disc Evidence", ex.Message); }
     }
 
     private async void DevEvidenceResetButton_Click(object? sender, RoutedEventArgs e)
     {
-        await _skeletoolCatalogueService.ResetEvidenceGatheredAsync();
+        await Task.Run(() => _skeletoolCatalogueService.ResetEvidenceGatheredAsync());
         AppendDiscEvidenceLog("All present SHA-1 catalogue units marked pending for evidence gathering. Existing evidence database rows were retained and will be refreshed on rescan.");
         await RefreshDiscEvidenceStatusAsync();
     }

@@ -31,7 +31,12 @@ public sealed partial class SkeletoolCatalogueService
         }
     }
 
-    public SkeletoolCatalogueService() => EnsureTemporaryCache();
+    public SkeletoolCatalogueService()
+    {
+        // Cache discovery can recursively remove stale materialized images from earlier
+        // sessions. It is housekeeping, not a prerequisite for constructing the UI.
+        _ = Task.Run(EnsureTemporaryCache);
+    }
 
     public async Task<IReadOnlyList<SkeletoolCatalogueRoot>> GetRootsAsync(CancellationToken cancellationToken = default)
     {

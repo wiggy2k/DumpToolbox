@@ -366,8 +366,8 @@ public partial class MainWindow : Window
                 if (savePartialFilesRequested)
                 {
                     AppendFindCrcsLog(inferredNoCueSingleton
-                        ? "Partial inspection saving enabled: the inferred no-CUE singleton edge candidate will save a bounded .partial file when possible."
-                        : "Partial inspection saving enabled: unmatched AUDIO tracks will save bounded .partial candidates when reliable neighbouring anchors exist; short extents may also save forward/backward target-sized hypotheses.");
+                        ? "Partial inspection saving is unavailable for the inferred no-CUE singleton because there is no adjacent AUDIO track to anchor it."
+                        : "Partial inspection saving enabled: AUDIO partials use only adjacent matched AUDIO tracks as anchors. First and last disc-edge audio partials also get a copy with outside zero-audio frames removed.");
                 }
 
                 string outputDirectory = Path.GetDirectoryName(Path.GetFullPath(filePath)) ?? Directory.GetCurrentDirectory();

@@ -225,7 +225,7 @@ public partial class MainWindow
             AppendAudioLog("Working format: raw signed 16-bit stereo Redump BIN PCM, little-endian, no WAV header or processing.");
             AppendAudioLog($"Edge silence search: {edgeSeconds:N3} seconds at each end; FindCRCs alignment: 4 bytes (one stereo sample frame).");
             AppendAudioLog($"Under-dumped edge repair: {(AudioEdgeRepairCheckBox.IsChecked == true ? "enabled (zero-fill first, then Find-ends against combined audio)" : "disabled") }.");
-            AppendAudioLog($"Save unmatched first/final edge partials: {(AudioSavePartialCheckBox.IsChecked == true ? "enabled" : "disabled") }.");
+            AppendAudioLog($"Save unmatched first/final edge partials plus outside-zero-trimmed copies: {(AudioSavePartialCheckBox.IsChecked == true ? "enabled" : "disabled") }.");
             bool headsTailsCorpusAvailable = IsAudioHeadsTailsCorpusAvailable(out string? headsTailsCorpusPath);
             bool headsTailsEnabled = headsTailsCorpusAvailable && AudioHeadsTailsCheckBox.IsEnabled && AudioHeadsTailsCheckBox.IsChecked == true && AudioEdgeRepairCheckBox.IsChecked == true;
             AppendAudioLog($"Heads and Tails edge recovery: {(headsTailsEnabled ? $"enabled — source {headsTailsCorpusPath}" : "disabled") }.");

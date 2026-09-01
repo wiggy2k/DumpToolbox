@@ -5,6 +5,15 @@ namespace DumpToolbox.Core;
 
 public sealed partial class EdgeRecoveryService
 {
+    private const int CddaPcmFrameBytes = 4;
+
+    private enum AudioPartialTrim
+    {
+        None,
+        LeadingZeroFrames,
+        TrailingZeroFrames
+    }
+
     private async Task<SearchResult> RepairOneAsync(
         string source,
         long sourceLength,
@@ -18,7 +27,8 @@ public sealed partial class EdgeRecoveryService
         bool savePartialOnFailure,
         IProgress<string>? activity,
         List<string> messages,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AudioPartialTrim partialTrim = AudioPartialTrim.None)
     {
         string side = missingMode == FindEndsMode.MissingStart ? "start" : "end";
         long missingLength = target.Size - partialLength;
@@ -35,11 +45,13 @@ public sealed partial class EdgeRecoveryService
             messages.Add(noMd5);
             if (savePartialOnFailure)
             {
+                long inspectionOffset = partialTrim == AudioPartialTrim.None ? expectedStart : partialOffset;
+                long inspectionLength = partialTrim == AudioPartialTrim.None ? target.Size : partialLength;
                 SearchResult inspected = await SaveInspectionPartialAsync(
-                    source, expectedStart, target.Size, target, targetIndex, outputRoot,
+                    source, inspectionOffset, inspectionLength, target, targetIndex, outputRoot,
                     new SearchResult(target, expectedStart, false, noMd5),
                     "target-sized window derived from the adjacent audio anchor",
-                    activity, messages, cancellationToken).ConfigureAwait(false);
+                    activity, messages, cancellationToken, partialTrim).ConfigureAwait(false);
                 return inspected;
             }
             return new SearchResult(target, expectedStart, false, noMd5);
@@ -102,11 +114,13 @@ public sealed partial class EdgeRecoveryService
 
             if (savePartialOnFailure)
             {
+                long inspectionOffset = partialTrim == AudioPartialTrim.None ? expectedStart : partialOffset;
+                long inspectionLength = partialTrim == AudioPartialTrim.None ? target.Size : partialLength;
                 SearchResult inspected = await SaveInspectionPartialAsync(
-                    source, expectedStart, target.Size, target, targetIndex, outputRoot,
+                    source, inspectionOffset, inspectionLength, target, targetIndex, outputRoot,
                     new SearchResult(target, expectedStart, false, $"EDGE: {name}: missing {side} segment was not recovered.", findEnds.CrcCandidates),
                     "target-sized window derived from the adjacent audio anchor",
-                    activity, messages, cancellationToken).ConfigureAwait(false);
+                    activity, messages, cancellationToken, partialTrim).ConfigureAwait(false);
                 return inspected;
             }
 
@@ -175,13 +189,16 @@ public sealed partial class EdgeRecoveryService
         string boundaryDescription,
         IProgress<string>? activity,
         List<string> messages,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AudioPartialTrim trim = AudioPartialTrim.None)
     {
         // Prefer a target-sized inspection candidate.  If the requested window
         // starts inside the source but runs beyond EOF (the common final-track
         // under-dump case), still save every available byte and explicitly report
         // the shortfall instead of discarding the useful partial.
-        long requestedLength = target.Size;
+        long requestedLength = trim == AudioPartialTrim.None
+            ? target.Size
+            : Math.Min(length, target.Size);
         long sourceLength = new FileInfo(source).Length;
         if (requestedLength <= 0 || offset < 0 || offset >= sourceLength)
         {
@@ -204,21 +221,124 @@ public sealed partial class EdgeRecoveryService
         string output = await SavePartialAsync(
             source, offset, saveLength, target, targetIndex, outputRoot, cancellationToken).ConfigureAwait(false);
 
+        if (trim != AudioPartialTrim.None)
+        {
+            await SaveZeroTrimmedAudioPartialAsync(
+                source, offset, saveLength, target, targetIndex, outputRoot, trim,
+                activity, messages, cancellationToken).ConfigureAwait(false);
+        }
+
         string message;
-        if (saveLength == requestedLength)
+        if (saveLength == target.Size)
         {
             message =
                 $"EDGE PARTIAL: {TargetDisplayName(target, targetIndex)}: saved exactly the expected {target.Size:N0} byte(s) from source offset {offset:N0} as {Path.GetFileName(output)} for manual inspection; {boundaryDescription}.";
         }
         else
         {
-            long shortfall = requestedLength - saveLength;
+            long shortfall = target.Size - saveLength;
             message =
                 $"EDGE PARTIAL: {TargetDisplayName(target, targetIndex)}: saved the available {saveLength:N0} byte(s) from source offset {offset:N0} as {Path.GetFileName(output)} for manual inspection; the partial is SHORT by {shortfall:N0} byte(s) (target expects {target.Size:N0}); {boundaryDescription}.";
         }
 
         Report(activity, messages, message);
         return existing with { Status = message, OutputPath = output };
+    }
+
+    private static async Task SaveZeroTrimmedAudioPartialAsync(
+        string source,
+        long offset,
+        long length,
+        HashTarget target,
+        int targetIndex,
+        string outputRoot,
+        AudioPartialTrim trim,
+        IProgress<string>? activity,
+        List<string> messages,
+        CancellationToken cancellationToken)
+    {
+        string side = trim == AudioPartialTrim.LeadingZeroFrames ? "leading" : "trailing";
+        if (length <= 0 || length % CddaPcmFrameBytes != 0)
+        {
+            Report(activity, messages,
+                $"EDGE PARTIAL: {TargetDisplayName(target, targetIndex)}: the {side}-zero-trimmed copy was not saved because the available audio is not aligned to a complete 4-byte stereo PCM frame.");
+            return;
+        }
+
+        (long first, long last) = await FindNonZeroPcmFrameBoundsAsync(
+            source, offset, length, cancellationToken).ConfigureAwait(false);
+        if (first < 0)
+        {
+            Report(activity, messages,
+                $"EDGE PARTIAL: {TargetDisplayName(target, targetIndex)}: the {side}-zero-trimmed copy was not saved because the partial contains only zero PCM frames.");
+            return;
+        }
+
+        long trimmedOffset;
+        long trimmedLength;
+        long removedBytes;
+        string variant;
+        if (trim == AudioPartialTrim.LeadingZeroFrames)
+        {
+            removedBytes = first;
+            trimmedOffset = checked(offset + removedBytes);
+            trimmedLength = length - removedBytes;
+            variant = "leading-zero-trimmed";
+        }
+        else
+        {
+            trimmedOffset = offset;
+            trimmedLength = checked(last + CddaPcmFrameBytes);
+            removedBytes = length - trimmedLength;
+            variant = "trailing-zero-trimmed";
+        }
+
+        string output = await SavePartialAsync(
+            source, trimmedOffset, trimmedLength, target, targetIndex, outputRoot,
+            cancellationToken, variant).ConfigureAwait(false);
+        Report(activity, messages,
+            $"EDGE PARTIAL: {TargetDisplayName(target, targetIndex)}: saved {Path.GetFileName(output)} after removing {removedBytes:N0} byte(s) ({removedBytes / CddaPcmFrameBytes:N0} stereo PCM frame(s)) of {side} zero audio.");
+    }
+
+    private static async Task<(long First, long Last)> FindNonZeroPcmFrameBoundsAsync(
+        string source,
+        long offset,
+        long length,
+        CancellationToken cancellationToken)
+    {
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+        try
+        {
+            await using var input = new FileStream(source, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete, BufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            input.Position = offset;
+            long first = -1;
+            long last = -1;
+            long processed = 0;
+            while (processed < length)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int want = (int)Math.Min(buffer.Length - (buffer.Length % CddaPcmFrameBytes), length - processed);
+                await input.ReadExactlyAsync(buffer.AsMemory(0, want), cancellationToken).ConfigureAwait(false);
+                for (int i = 0; i < want; i += CddaPcmFrameBytes)
+                {
+                    if (buffer[i] == 0 && buffer[i + 1] == 0 && buffer[i + 2] == 0 && buffer[i + 3] == 0)
+                        continue;
+
+                    long frameOffset = processed + i;
+                    if (first < 0)
+                        first = frameOffset;
+                    last = frameOffset;
+                }
+                processed += want;
+            }
+            return (first, last);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static async Task<string> SavePartialAsync(

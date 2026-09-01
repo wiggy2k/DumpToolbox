@@ -15,15 +15,16 @@ public partial class MainWindow
     private bool _sha1CatalogueLogUndocked;
 
     private void AppendSha1CatalogueLog(string message)
+        => AppendSha1CatalogueLogBatch(new[] { message });
+
+    private void AppendSha1CatalogueLogBatch(IReadOnlyList<string> messages)
     {
-        string line = $"[{DateTime.Now:HH:mm:ss}] {message}";
-        if (_sha1CatalogueLogText.Length > 0) _sha1CatalogueLogText.AppendLine();
-        _sha1CatalogueLogText.Append(line);
-        SettingsSha1LogTextBox.Text = _sha1CatalogueLogText.ToString();
-        SettingsSha1LogTextBox.CaretIndex = SettingsSha1LogTextBox.Text?.Length ?? 0;
+        string text = UiLogText.AppendTimestamped(_sha1CatalogueLogText, messages);
+        SettingsSha1LogTextBox.Text = text;
+        SettingsSha1LogTextBox.CaretIndex = text.Length;
         if (_sha1CatalogueLogWindowBox is not null)
         {
-            _sha1CatalogueLogWindowBox.Text = _sha1CatalogueLogText.ToString();
+            _sha1CatalogueLogWindowBox.Text = text;
             ScrollDetachedLogToEnd(_sha1CatalogueLogWindowBox);
         }
     }
@@ -88,7 +89,7 @@ public partial class MainWindow
         try
         {
             SettingsSha1DatabasePathText.Text = $"Database: {_skeletoolCatalogueService.DatabasePath}";
-            IReadOnlyList<SkeletoolCatalogueRoot> roots = await _skeletoolCatalogueService.GetRootsAsync();
+            IReadOnlyList<SkeletoolCatalogueRoot> roots = await Task.Run(() => _skeletoolCatalogueService.GetRootsAsync());
             SettingsSha1RootsPanel.Children.Clear();
             if (roots.Count == 0)
             {
@@ -125,7 +126,7 @@ public partial class MainWindow
                 var remove = new Button { Content = "Remove folder", Padding = new Avalonia.Thickness(12, 6) };
                 remove.Click += async (_, _) =>
                 {
-                    await _skeletoolCatalogueService.DeactivateRootAsync(root.Id);
+                    await Task.Run(() => _skeletoolCatalogueService.DeactivateRootAsync(root.Id));
                     await RefreshSha1CatalogueRootsAsync();
                 };
                 var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
@@ -161,7 +162,7 @@ public partial class MainWindow
         if (folders.Count == 0 || folders[0].TryGetLocalPath() is not { } path) return;
         try
         {
-            long id = await _skeletoolCatalogueService.AddRootAsync(path);
+            long id = await Task.Run(() => _skeletoolCatalogueService.AddRootAsync(path));
             await RefreshSha1CatalogueRootsAsync();
             await RunSha1CatalogueScanAsync(new[] { id });
         }
@@ -173,7 +174,7 @@ public partial class MainWindow
 
     private async void SettingsSha1CheckAllButton_Click(object? sender, RoutedEventArgs e)
     {
-        IReadOnlyList<SkeletoolCatalogueRoot> roots = await _skeletoolCatalogueService.GetRootsAsync();
+        IReadOnlyList<SkeletoolCatalogueRoot> roots = await Task.Run(() => _skeletoolCatalogueService.GetRootsAsync());
         await RunSha1CatalogueScanAsync(roots.Select(r => r.Id).ToArray());
     }
 
@@ -187,46 +188,56 @@ public partial class MainWindow
         SettingsSha1RootsPanel.IsEnabled = false;
         SettingsSha1CancelButton.IsEnabled = true;
         SettingsSha1ProgressBar.Value = 0;
+        UiBatchedLogProgress? activityLog = null;
         try
         {
             AppendSha1CatalogueLog($"=== Collection scan started ({rootIds.Count} folder(s), {Math.Clamp((int)(SettingsSha1ThreadsBox.Value ?? 1), 1, 64)} thread(s)) ===");
+            activityLog = new UiBatchedLogProgress(AppendSha1CatalogueLogBatch);
             for (int rootIndex = 0; rootIndex < rootIds.Count; rootIndex++)
             {
                 int rootOrdinal = rootIndex;
-                var progress = new Progress<SkeletoolCatalogueProgress>(p =>
+                using var progress = new UiLatestProgress<SkeletoolCatalogueProgress>(p =>
                 {
                     double inside = p.SourcesTotal <= 0 ? 0 : (double)p.SourcesProcessed / p.SourcesTotal;
                     SettingsSha1ProgressBar.Value = ((rootOrdinal + inside) / rootIds.Count) * 100.0;
                     SettingsSha1StatusText.Text = $"{p.SourcesProcessed:N0} / {p.SourcesTotal:N0} scanned";
                 });
                 int workers = Math.Clamp((int)(SettingsSha1ThreadsBox.Value ?? 1), 1, 64);
-                var activityLog = new Progress<string>(AppendSha1CatalogueLog);
-                await _skeletoolCatalogueService.ScanRootAsync(rootIds[rootIndex], progress, workers, activityLog, _sha1CatalogueCts.Token);
+                await Task.Run(
+                    () => _skeletoolCatalogueService.ScanRootAsync(
+                        rootIds[rootIndex], progress, workers, activityLog, _sha1CatalogueCts.Token),
+                    _sha1CatalogueCts.Token);
             }
+            activityLog.Flush();
             SettingsSha1ProgressBar.Value = 100;
             SettingsSha1StatusText.Text = "Scan complete.";
             AppendSha1CatalogueLog("=== Collection scan complete ===");
             if (_skeletonInspection is not null && IsSha1DatabaseEnabled)
             {
                 IReadOnlyDictionary<string, SkeletonSourceMatch> catalogueMatches =
-                    await _skeletoolCatalogueService.FindMatchesAsync(_skeletonInspection, _sha1CatalogueCts.Token);
+                    await Task.Run(
+                        () => _skeletoolCatalogueService.FindMatchesAsync(_skeletonInspection, _sha1CatalogueCts.Token),
+                        _sha1CatalogueCts.Token);
                 _skeletonMatches = MergeSkeletonMatches(_skeletonMatches, catalogueMatches);
                 MarkSkeletonMissingStatuses();
             }
         }
         catch (OperationCanceledException)
         {
+            activityLog?.Flush();
             SettingsSha1StatusText.Text = "Scan cancelled.";
             AppendSha1CatalogueLog("CANCELLED: collection scan cancelled; completed source records were retained.");
         }
         catch (Exception ex)
         {
+            activityLog?.Flush();
             SettingsSha1StatusText.Text = $"Collection scan error: {ex.Message}";
             AppendSha1CatalogueLog($"FATAL: {ex.GetType().Name}: {ex.Message}");
             await ShowMessageAsync("DumpToolbox — SHA-1 Database", ex.Message);
         }
         finally
         {
+            activityLog?.Dispose();
             _sha1CatalogueCts.Dispose();
             _sha1CatalogueCts = null;
             SettingsSha1CheckAllButton.IsEnabled = true;
