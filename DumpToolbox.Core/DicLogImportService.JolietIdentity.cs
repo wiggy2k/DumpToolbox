@@ -820,7 +820,7 @@ public sealed partial class DicLogImportService
         int slash = normalized.LastIndexOf('/');
         return slash < 0 ? normalized.TrimStart('/') : normalized[(slash + 1)..];
     }
-    private static bool MatchMethodTrustsRelativePath(string method)
+    internal static bool MatchMethodTrustsRelativePath(string method)
         => method.Contains("Joliet", StringComparison.OrdinalIgnoreCase) ||
            method.Equals("ISO9660 exact relative path+filename+size", StringComparison.OrdinalIgnoreCase) ||
            MatchMethodProvesJolietIdentity(method);

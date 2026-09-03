@@ -511,8 +511,7 @@ public sealed partial class DicDonorImageService
                     if (jolietByPrimary.TryGetValue(selected, out DicDonorFile? mappedJoliet))
                     {
                         sourceRelativePath = NormalizePath(mappedJoliet.Path);
-                        if (string.IsNullOrWhiteSpace(method))
-                            method = "Donor Joliet pathname -> DIC primary ISO9660 record + exact path+size";
+                        method = AddDonorJolietProvenance(method);
                     }
 
                     matches[entry.Path] = new SkeletonSourceMatch(

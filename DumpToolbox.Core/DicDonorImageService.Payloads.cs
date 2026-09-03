@@ -11,6 +11,16 @@ public sealed partial class DicDonorImageService
 
     private sealed record DonorPayloadSelection(DicDonorFile File, string Method);
 
+    internal static string AddDonorJolietProvenance(string method)
+    {
+        if (method.Contains("Joliet", StringComparison.OrdinalIgnoreCase))
+            return method;
+
+        return string.IsNullOrWhiteSpace(method)
+            ? "Donor Joliet pathname -> DIC primary ISO9660 record + exact path+size"
+            : method + " + mapped Joliet pathname";
+    }
+
     private static DonorPayloadSelection? FindStrongDonorPayloadMatch(
         SkeletonContentEntry entry,
         IReadOnlyList<SkeletonContentEntry> required,
