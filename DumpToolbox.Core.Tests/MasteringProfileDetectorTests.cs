@@ -12,11 +12,14 @@ public sealed class MasteringProfileDetectorTests
             Array.Empty<long>(),
             Array.Empty<long>(),
             0,
-            false);
+            false,
+            "%/E");
 
         IMasteringProfile profile = MasteringProfileDetector.Detect(evidence);
 
         Assert.Equal((byte)0x2D, profile.SupplementaryRootXaFileNumber);
+        Assert.Equal(JolietRecordOrdering.PreservePrimaryRecordOrder, profile.JolietRecordOrdering);
+        Assert.Equal(JolietPathTableOrdering.CaseSensitiveUcs2Identifier, profile.JolietPathTableOrdering);
         Assert.Contains("Easy CD Creator", profile.Name, StringComparison.Ordinal);
     }
 
@@ -50,5 +53,46 @@ public sealed class MasteringProfileDetectorTests
 
         Assert.Equal("Generic / evidence-only", profile.Name);
         Assert.Empty(profile.MatchedRules);
+        Assert.Equal(JolietRecordOrdering.PreservePrimaryRecordOrder, profile.JolietRecordOrdering);
+        Assert.Equal(JolietPathTableOrdering.PreservePrimaryDirectoryOrder, profile.JolietPathTableOrdering);
     }
+
+    [Theory]
+    [InlineData("%/@")]
+    [InlineData("%/C")]
+    [InlineData("%/E")]
+    public void JolietEscapeSequenceSelectsStandardsOrdering(string escapeSequence)
+    {
+        var evidence = new MasteringEvidence(
+            string.Empty,
+            Array.Empty<long>(),
+            Array.Empty<long>(),
+            0,
+            false,
+            escapeSequence);
+
+        IMasteringProfile profile = MasteringProfileDetector.Detect(evidence);
+
+        Assert.Equal(JolietRecordOrdering.CaseSensitiveUcs2Identifier, profile.JolietRecordOrdering);
+        Assert.Equal(JolietPathTableOrdering.CaseSensitiveUcs2Identifier, profile.JolietPathTableOrdering);
+        Assert.Contains(escapeSequence, profile.MatchedRules.Single(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CeQuadratRetainsItsProvenPrimaryPathTableOrder()
+    {
+        var evidence = new MasteringEvidence(
+            string.Empty,
+            Array.Empty<long>(),
+            Array.Empty<long>(),
+            0,
+            true,
+            "%/@");
+
+        IMasteringProfile profile = MasteringProfileDetector.Detect(evidence);
+
+        Assert.Equal(JolietRecordOrdering.AccentFoldedCaseSensitiveIdentifier, profile.JolietRecordOrdering);
+        Assert.Equal(JolietPathTableOrdering.PreservePrimaryDirectoryOrder, profile.JolietPathTableOrdering);
+    }
+
 }

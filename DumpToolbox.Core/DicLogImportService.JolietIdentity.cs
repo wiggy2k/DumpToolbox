@@ -410,7 +410,7 @@ public sealed partial class DicLogImportService
         return components.All(component => !component.Contains('~'));
     }
 
-    private static bool SourceJolietPathMatchesPrimaryEntry(string sourcePath, string isoPath, bool leafIsFile = true)
+    internal static bool SourceJolietPathMatchesPrimaryEntry(string sourcePath, string isoPath, bool leafIsFile = true)
     {
         string[] source = NormalizeIsoPath(sourcePath).Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         string[] target = NormalizeIsoPath(isoPath).Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -546,15 +546,23 @@ public sealed partial class DicLogImportService
         // "3D_Modeller" -> "3D_MOD_1" and long media filenames similarly
         // become PREFIX_1.  Accept either delimiter, while leaving exact size/full
         // path/reverse-uniqueness as the authority for source matching.
-        Match match = Regex.Match(targetStem, @"^(?<prefix>[A-Z0-9_]{1,6})(?:~|_)(?<n>[1-9][0-9]*)$", RegexOptions.IgnoreCase);
+        // ISO9660/DOS-style short names may retain punctuation such as '&' in the
+        // six-character prefix (for example Sam& Shara -> SAM&SH~1). Keep the
+        // accepted set aligned with IsIso83Character, excluding '~' because it is
+        // the numeric-alias delimiter here.
+        Match match = Regex.Match(
+            targetStem,
+            @"^(?<prefix>[A-Z0-9_$%\-@!#&(){}^`']{1,6})(?:~|_)(?<n>[1-9][0-9]*)$",
+            RegexOptions.IgnoreCase);
         if (!match.Success)
             return false;
 
         string normalizedSourceStem = KeepShortNameCharacters(sourceStem);
         string prefix = match.Groups["prefix"].Value.ToUpperInvariant();
         string comparableSourceStem = normalizedSourceStem.Replace("_", string.Empty, StringComparison.Ordinal);
-        string comparablePrefix = prefix.Replace("_", string.Empty, StringComparison.Ordinal);
-        if (comparableSourceStem.Length < comparablePrefix.Length ||
+        string comparablePrefix = KeepShortNameCharacters(prefix).Replace("_", string.Empty, StringComparison.Ordinal);
+        if (comparablePrefix.Length == 0 ||
+            comparableSourceStem.Length < comparablePrefix.Length ||
             !comparableSourceStem.StartsWith(comparablePrefix, StringComparison.OrdinalIgnoreCase))
         {
             return false;
@@ -843,7 +851,6 @@ public sealed partial class DicLogImportService
 
         return false;
     }
-
 
     private static CeQuadratLinkTableContext? TryReadCeQuadratLinkTableContext(
         SkeletonInspectionResult inspection,

@@ -10,4 +10,5 @@ public sealed record MasteringEvidence(
     IReadOnlyList<long> PrimaryDescriptorVolumeSpaceSizes,
     IReadOnlyList<long> SupplementaryDescriptorVolumeSpaceSizes,
     long SupplementaryVolumeSpaceSize,
-    bool HasCeQuadratDirectoryLinkTable);
+    bool HasCeQuadratDirectoryLinkTable,
+    string JolietEscapeSequence = "");

@@ -11,6 +11,7 @@ public static class MasteringProfileDetector
     public static IMasteringProfile Detect(MasteringEvidence evidence)
     {
         var builder = new MasteringProfileBuilder();
+        JolietStandardProfileRule.TryApply(evidence, builder);
         EasyCdCreatorProfileRule.TryApply(evidence, builder);
         DuplicatePvd150ProfileRule.TryApply(evidence, builder);
         CeQuadratProfileRule.TryApply(evidence, builder);
