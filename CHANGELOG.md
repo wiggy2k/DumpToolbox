@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.101 — 2026-09-03
+
+### Added
+
+- Disc Evidence now retains volume-descriptor sequence and geometry, raw ISO9660/Joliet directory identifiers and record positions, Type-L/Type-M path-table ordering, and explicit primary-to-supplementary record pairs for mastering analysis.
+- Evidence schema updates automatically queue existing catalogue units for evidence refresh and add dedicated ordering-analysis exports.
+
+### Fixed
+
+- DIC source-folder scans can read the Joliet namespace directly from a mounted optical disc and attach uniquely paired supplementary paths to already-verified source matches without requiring an extracted filesystem first.
+- Exact primary ISO9660 matches from donor BIN/ISO images now retain their uniquely mapped Joliet pathname authority, allowing supplementary metadata synthesis instead of incorrectly reporting every matched file as lacking a trustworthy Joliet identity.
+
+### Tests
+
+- Added regression coverage for mounted-disc primary/Joliet pairing, ambiguous shared geometry, and donor-match Joliet provenance.
+
 ## 0.8.100 — 2026-09-03
 
 ### Fixed
