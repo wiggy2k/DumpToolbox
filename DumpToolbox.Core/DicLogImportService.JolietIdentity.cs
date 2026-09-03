@@ -35,8 +35,6 @@ public sealed partial class DicLogImportService
             return new DicJolietNameUpdateResult(false, 0, 0, 0, "not-DIC", warnings);
         }
 
-        _ = sourceDirectory; // Relative Joliet paths are carried by each persisted source match.
-
         // v0.1.9: an ISO9660-only disc must not be rejected for lacking Joliet pathname
         // evidence.  Establish that a real Joliet SVD exists before inspecting source
         // names; otherwise there is no supplementary namespace to reconstruct.
@@ -52,6 +50,12 @@ public sealed partial class DicLogImportService
 
         if (ordinaryEntries.Length == 0)
             return new DicJolietNameUpdateResult(false, 0, 0, 0, "no ordinary files", warnings);
+
+        bool matchesAlreadyContainMountedDiscNames = matches.Values.Any(match =>
+            match.MatchMethod.Equals(MountedDiscJolietPathService.MatchMethod, StringComparison.Ordinal));
+        IReadOnlyDictionary<string, string> mountedDiscJolietPaths = matchesAlreadyContainMountedDiscNames
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : MountedDiscJolietPathService.TryRead(sourceDirectory, cancellationToken);
 
         // Supplementary directory sectors are not present in DIC's usual log set.
         // Rebuild them only when every ordinary file has a trustworthy path identity:
@@ -86,7 +90,20 @@ public sealed partial class DicLogImportService
             {
                 matchedUsed++;
                 string? relative = match.SourceRelativePath;
-                if (!string.IsNullOrWhiteSpace(relative) && MatchMethodTrustsRelativePath(match.MatchMethod))
+                string mountedDiscJolietPath = string.Empty;
+                bool matchComesFromSelectedSource = SourcePathIsInsideDirectory(match.SourcePath, sourceDirectory);
+                bool mountedDiscPathResolved = matchComesFromSelectedSource &&
+                    !string.IsNullOrWhiteSpace(relative) &&
+                    MountedDiscJolietPathService.TryResolveJolietPath(
+                        relative,
+                        mountedDiscJolietPaths,
+                        out mountedDiscJolietPath);
+                if (mountedDiscPathResolved)
+                {
+                    candidatePath = mountedDiscJolietPath;
+                    sourcePathsUsed++;
+                }
+                else if (!string.IsNullOrWhiteSpace(relative) && MatchMethodTrustsRelativePath(match.MatchMethod))
                 {
                     string normalizedRelative = NormalizeIsoPath(relative);
                     // Later-stage matchers can prove source identity even when the long Joliet
@@ -394,6 +411,25 @@ public sealed partial class DicLogImportService
             sourcePathsUsed,
             "validated Joliet source paths -> DIC primary ISO records",
             warnings);
+    }
+
+    private static bool SourcePathIsInsideDirectory(string sourcePath, string sourceDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(sourceDirectory))
+            return false;
+
+        try
+        {
+            string relative = Path.GetRelativePath(Path.GetFullPath(sourceDirectory), Path.GetFullPath(sourcePath));
+            return !Path.IsPathRooted(relative) &&
+                   !relative.Equals("..", StringComparison.Ordinal) &&
+                   !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                   !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsSafeZeroLengthPrimaryJolietFallback(string isoPath)

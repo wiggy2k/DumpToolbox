@@ -1992,6 +1992,16 @@ public sealed partial class SkeletonResurrectionService
             }
         }
 
+        // A mounted optical disc may expose only its primary ISO9660 namespace through
+        // normal filesystem enumeration even though the disc also contains Joliet. Read
+        // the supplementary tree directly from the read-only volume and attach only
+        // one-to-one extent/length mappings to source matches already proven above.
+        // This changes pathname evidence only; payload identity and placement remain
+        // governed by the existing DIC matching rules.
+        IReadOnlyDictionary<string, string> mountedDiscJolietPaths =
+            MountedDiscJolietPathService.TryRead(directory, cancellationToken);
+        MountedDiscJolietPathService.EnrichMatches(matches, mountedDiscJolietPaths);
+
         progress?.Report(new SkeletonSourceScanProgress(
             requiredEntries.Length,
             requiredEntries.Length,
