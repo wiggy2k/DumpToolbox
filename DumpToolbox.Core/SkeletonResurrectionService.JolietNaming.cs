@@ -630,7 +630,14 @@ private static bool JolietComponentMatchesNumericShortAlias(string source, strin
         // suffix as _N, e.g. "3D_Modeller" -> "3D_MOD_1" and
         // "Kurtulus Savasi Destani.avi" -> "KURTUL_1.AVI".  Treat the
         // underscore form as the same kind of collision-dependent short alias.
-        Match match = Regex.Match(targetStem, @"^(?<prefix>[A-Z0-9_]{1,6})(?:~|_)(?<n>[1-9][0-9]*)$", RegexOptions.IgnoreCase);
+        // ISO9660/DOS-style short names may retain punctuation such as '&' in the
+        // six-character prefix (for example Sam& Shara -> SAM&SH~1). Keep the
+        // accepted set aligned with the ISO 8.3 character rules, excluding '~'
+        // because it is the numeric-alias delimiter here.
+        Match match = Regex.Match(
+            targetStem,
+            @"^(?<prefix>[A-Z0-9_$%\-@!#&(){}^`']{1,6})(?:~|_)(?<n>[1-9][0-9]*)$",
+            RegexOptions.IgnoreCase);
         if (!match.Success)
             return false;
 
@@ -643,8 +650,9 @@ private static bool JolietComponentMatchesNumericShortAlias(string source, strin
         // size, the complete path and reverse-uniqueness are still enforced by the
         // caller before any source is accepted.
         string comparableSourceStem = normalizedSourceStem.Replace("_", string.Empty, StringComparison.Ordinal);
-        string comparablePrefix = prefix.Replace("_", string.Empty, StringComparison.Ordinal);
-        if (comparableSourceStem.Length < comparablePrefix.Length ||
+        string comparablePrefix = KeepShortNameCharacters(prefix).Replace("_", string.Empty, StringComparison.Ordinal);
+        if (comparablePrefix.Length == 0 ||
+            comparableSourceStem.Length < comparablePrefix.Length ||
             !comparableSourceStem.StartsWith(comparablePrefix, StringComparison.OrdinalIgnoreCase))
         {
             return false;

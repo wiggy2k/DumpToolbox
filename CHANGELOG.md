@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.100 — 2026-09-03
+
+### Fixed
+
+- Joliet-to-ISO9660 matching now recognises numeric short-name aliases whose prefix contains valid punctuation, including names such as `Sam& Shara.bik` mapped to `SAM&SH~1.BIK`.
+- Synthetic Joliet path tables and directory records now default to the mandatory case-sensitive UCS-2 ordering declared by `%/@`, `%/C`, or `%/E`; only mastering profiles with contrary evidence retain primary ISO9660 path-table order.
+- Easy CD Creator masters retain their formatter-proven primary ISO9660 directory-record sequence while continuing to use UCS-2 path-table ordering.
+- Paired XA masters with a non-sector-rounded SVD root and complete one-to-one primary-directory extent evidence retain primary ordering for both Joliet directory records and path-table numbering.
+
+### Tests
+
+- Added regression coverage for punctuated numeric aliases in both source matching and Joliet reconstruction.
+- Added mastering-profile coverage for standards-default Joliet ordering plus the evidence-backed Easy CD Creator record-order and CeQuadrat path-order exceptions.
+
 ## 0.8.99 — 2026-09-01
 
 ### Changed

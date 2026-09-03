@@ -2,7 +2,7 @@
 
 DumpToolbox is a cross-platform .NET 8 and Avalonia desktop application for disc-image conversion, checksum-based recovery, and reconstruction from Redumper, DiscImageCreator, and PlayStation 3 IRD metadata.
 
-Current version: **0.8.99**
+Current version: **0.8.100**
 
 ## Tools
 

@@ -3,7 +3,14 @@ namespace DumpToolbox.Core.Mastering;
 public enum JolietRecordOrdering
 {
     PreservePrimaryRecordOrder,
+    CaseSensitiveUcs2Identifier,
     AccentFoldedCaseSensitiveIdentifier
+}
+
+public enum JolietPathTableOrdering
+{
+    PreservePrimaryDirectoryOrder,
+    CaseSensitiveUcs2Identifier
 }
 
 /// <summary>
@@ -15,5 +22,6 @@ public interface IMasteringProfile
     string Name { get; }
     IReadOnlyList<string> MatchedRules { get; }
     JolietRecordOrdering JolietRecordOrdering { get; }
+    JolietPathTableOrdering JolietPathTableOrdering { get; }
     byte? SupplementaryRootXaFileNumber { get; }
 }

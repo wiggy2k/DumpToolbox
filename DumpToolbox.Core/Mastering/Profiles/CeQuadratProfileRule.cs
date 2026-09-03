@@ -10,6 +10,7 @@ internal static class CeQuadratProfileRule
 
         builder.AddName("CeQuadrat/WinOnCD");
         builder.JolietRecordOrdering = JolietRecordOrdering.AccentFoldedCaseSensitiveIdentifier;
+        builder.JolietPathTableOrdering = JolietPathTableOrdering.PreservePrimaryDirectoryOrder;
         builder.AddRule("CeQuadrat private Joliet directory-link-table context");
         return true;
     }
