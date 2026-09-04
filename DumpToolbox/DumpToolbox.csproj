@@ -3,7 +3,7 @@
     <AssemblyName>DumpToolbox</AssemblyName>
     <RootNamespace>DumpToolbox</RootNamespace>
     <Product>DumpToolbox</Product>
-    <Version>0.8.101</Version>
+    <Version>0.8.102</Version>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

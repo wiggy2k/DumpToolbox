@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.102 — 2026-09-04
+
+### Fixed
+
+- NRG-to-BIN conversion now reconstructs Nero DAO mixed-mode Track 2's three-second pregap as 75 scrambled data sectors followed by 150 stored audio sectors, while omitting the duplicated first-track lead-in.
+- SkeleTool now checks both directions between the skeleton's ISO9660 file table and companion `.hash` manifest, warns about missing and unused entries together or separately, and marks unused hash-only entries as ignored during source matching.
+
+### Tests
+
+- Added regression coverage for Nero DAO mixed-mode pregap geometry, sector scrambling, output timing, and SkeleTool manifest completeness checks.
+
 ## 0.8.101 — 2026-09-03
 
 ### Added

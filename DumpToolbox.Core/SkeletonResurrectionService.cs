@@ -82,7 +82,11 @@ public sealed record SkeletonInspectionResult(
     IReadOnlySet<long>? DicUnresolvedEccEdcMismatchLbas = null,
     IReadOnlySet<long>? DicExactMainInfoLbas = null,
     IReadOnlyList<DicSupplementaryDirectoryHint>? DicSupplementaryDirectoryHints = null,
-    IReadOnlyList<DicHfsPartitionInspection>? DicHfsPartitions = null);
+    IReadOnlyList<DicHfsPartitionInspection>? DicHfsPartitions = null)
+{
+    public IReadOnlyList<string> FilesMissingFromHashManifest { get; init; } = Array.Empty<string>();
+    public int MissingHashEntryCount => FilesMissingFromHashManifest.Count;
+}
 
 public sealed record DicHfsPartitionInspection(
     string Name,

@@ -55,6 +55,10 @@ public sealed partial class SkeletonResurrectionService
             }
         }
 
+        IReadOnlyList<string> filesMissingFromHashManifest = FindFilesMissingFromHashManifest(
+            byPath.Keys,
+            manifest.Select(entry => entry.Path));
+
         var unmapped = new List<EntryBuilder>();
         foreach (HashManifestEntry item in manifest)
         {
@@ -134,6 +138,26 @@ public sealed partial class SkeletonResurrectionService
             entries,
             isoTree.VolumeIdentifier,
             manifest.Count,
-            unmapped.Count);
+            unmapped.Count)
+        {
+            FilesMissingFromHashManifest = filesMissingFromHashManifest
+        };
+    }
+
+    internal static IReadOnlyList<string> FindFilesMissingFromHashManifest(
+        IEnumerable<string> skeletonFilePaths,
+        IEnumerable<string> manifestPaths)
+    {
+        var exactManifestPaths = manifestPaths
+            .Select(NormalizeManifestPath)
+            .Where(path => path.StartsWith('/'))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return skeletonFilePaths
+            .Select(NormalizeIsoPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => !exactManifestPaths.Contains(path))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 }

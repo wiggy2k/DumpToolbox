@@ -27,7 +27,10 @@ public sealed record NrgTrackInspection(
     long PregapSectors,
     long OutputIndex00Sector,
     long OutputIndex01Sector,
-    long OutputEndSector);
+    long OutputEndSector)
+{
+    public long SyntheticScrambledPregapSectors { get; init; }
+}
 
 public sealed record Nrg2BinInspection(
     string InputPath,
@@ -73,6 +76,8 @@ public sealed class Nrg2BinService
     private const int RawWithSubSectorSize = RawSectorSize + SubchannelBytes;
     private const int CookedSectorSize = 2048;
     private const int CopyBufferSectors = 256;
+    private const int StandardAudioPregapSectors = 150;
+    private const int MixedModeScrambledDataPregapSectors = 75;
 
     public async Task<Nrg2BinInspection> AnalyzeAsync(string inputPath, CancellationToken cancellationToken = default)
     {
@@ -257,6 +262,7 @@ public sealed class Nrg2BinService
                 256 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             byte[] cooked = new byte[CookedSectorSize];
+            byte[] emptyCooked = new byte[CookedSectorSize];
             byte[] raw = new byte[RawSectorSize];
             byte[] rawWithSub = new byte[RawWithSubSectorSize];
             byte[] emptySub = new byte[SubchannelBytes];
@@ -266,6 +272,33 @@ public sealed class Nrg2BinService
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 activity?.Report($"Session {track.SessionNumber:00}, track {track.Number:00}: {DescribeKind(track.Kind, track.HasSubchannel)}, {track.SectorCount:N0} sectors at NRG offset 0x{track.SourceOffset:X}.");
+
+                if (track.SyntheticScrambledPregapSectors > 0)
+                {
+                    activity?.Report(
+                        $"Session {track.SessionNumber:00}, track {track.Number:00}: rebuilding its 00:03:00 mixed-mode pregap as " +
+                        $"{track.SyntheticScrambledPregapSectors:N0} scrambled data sector(s) followed by " +
+                        $"{track.PregapSectors - track.SyntheticScrambledPregapSectors:N0} stored audio sector(s).");
+                    for (long i = 0; i < track.SyntheticScrambledPregapSectors; i++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        long lba = checked(
+                            track.DiscIndex01Lba -
+                            (track.PregapSectors - track.SyntheticScrambledPregapSectors) + i);
+                        Iso2BinService.BuildRawSectorFromCooked(
+                            emptyCooked,
+                            raw,
+                            lba,
+                            CdSectorMode.Mode1);
+                        CdPregapScrambleService.ScrambleSectorInPlace(raw);
+                        await output.WriteAsync(raw, cancellationToken);
+                        if (subOutput is not null)
+                            await subOutput.WriteAsync(emptySub, cancellationToken);
+                        sectorsDone++;
+                        progress?.Report(new Nrg2BinProgress(sectorsDone, inspection.OutputSectors, inputBytesDone));
+                    }
+                }
+
                 input.Position = track.SourceOffset;
 
                 if (track.StoredSectorSize == RawWithSubSectorSize && track.HasSubchannel)
@@ -512,14 +545,55 @@ public sealed class Nrg2BinService
 
         long cursor = outputStart;
         var result = new List<NrgTrackInspection>(temp.Count);
+        bool rebuildLongMixedModePregap = temp.Count >= 2 &&
+            temp[0].Number == firstTrack &&
+            temp[0].Kind == NrgTrackKind.Mode1Cooked &&
+            temp[0].PregapSectors == StandardAudioPregapSectors &&
+            temp[1].Number == firstTrack + 1 &&
+            temp[1].Kind == NrgTrackKind.Audio &&
+            !temp[1].HasSubchannel &&
+            temp[1].PregapSectors == StandardAudioPregapSectors &&
+            temp[0].DiscIndex01Lba != long.MinValue &&
+            temp[1].DiscIndex01Lba == temp[0].DiscIndex01Lba +
+                (temp[0].SectorCount - temp[0].PregapSectors) + temp[1].PregapSectors;
+
+        if (rebuildLongMixedModePregap)
+        {
+            warnings.Add(
+                "Nero DAO mixed-mode correction: omitted the stored first-track lead-in and rebuilt Track 02's 00:03:00 pregap as 75 scrambled data sectors followed by 150 stored audio sectors.");
+        }
+
         foreach (ParsedTrack t in temp.OrderBy(t => t.Number))
         {
-            long index00 = t.PregapSectors > 0 ? cursor : -1;
-            long index01 = cursor + t.PregapSectors;
-            long end = cursor + t.SectorCount;
+            long sourceOffset = t.SourceOffset;
+            long sourceBytes = t.SourceBytes;
+            long sectorCount = t.SectorCount;
+            long pregap = t.PregapSectors;
+            long syntheticScrambledPregap = 0;
+
+            if (rebuildLongMixedModePregap && t.Number == firstTrack)
+            {
+                long skippedBytes = checked(t.PregapSectors * t.SectorSize);
+                sourceOffset = checked(sourceOffset + skippedBytes);
+                sourceBytes = checked(sourceBytes - skippedBytes);
+                sectorCount = checked(sectorCount - t.PregapSectors);
+                pregap = 0;
+            }
+            else if (rebuildLongMixedModePregap && t.Number == firstTrack + 1)
+            {
+                syntheticScrambledPregap = MixedModeScrambledDataPregapSectors;
+                pregap = checked(pregap + syntheticScrambledPregap);
+            }
+
+            long index00 = pregap > 0 ? cursor : -1;
+            long index01 = checked(cursor + pregap);
+            long end = checked(cursor + syntheticScrambledPregap + sectorCount);
             long discLba = t.DiscIndex01Lba == long.MinValue ? index01 : t.DiscIndex01Lba;
             result.Add(new NrgTrackInspection(sessionNumber, t.Number, t.Kind, t.SectorSize, t.HasSubchannel,
-                t.SourceOffset, t.SourceBytes, t.SectorCount, discLba, t.PregapSectors, index00, index01, end));
+                sourceOffset, sourceBytes, sectorCount, discLba, pregap, index00, index01, end)
+            {
+                SyntheticScrambledPregapSectors = syntheticScrambledPregap
+            });
             cursor = end;
         }
         return result;

@@ -139,13 +139,57 @@ public partial class MainWindow : Window
                 ? $"raw 2352-byte CD data track, base LBA {inspection.BaseLba:N0}"
                 : "cooked 2048-byte ISO";
 
+            bool hasManifestWarnings = inspection.MissingHashEntryCount > 0 || inspection.UnmappedHashEntryCount > 0;
+            string manifestWarningSummary = inspection.MissingHashEntryCount > 0 && inspection.UnmappedHashEntryCount > 0
+                ? $" WARNING: {inspection.MissingHashEntryCount:N0} ISO file(s) have no manifest hash; {inspection.UnmappedHashEntryCount:N0} manifest entry/entries are unused."
+                : inspection.MissingHashEntryCount > 0
+                    ? $" WARNING: {inspection.MissingHashEntryCount:N0} ISO file(s) have no manifest hash."
+                    : inspection.UnmappedHashEntryCount > 0
+                        ? $" WARNING: {inspection.UnmappedHashEntryCount:N0} manifest entry/entries are unused."
+                        : string.Empty;
             SkeletonInspectionText.Text =
                 $"{kind}; {inspection.SectorCount:N0} sectors; volume '{inspection.VolumeIdentifier}'; " +
-                $"{normalFiles:N0} ISO files, {special:N0} special/hash-only entries, {inspection.HashEntryCount:N0} manifest hashes.";
-            SkeletonProgressText.Text = "Loaded";
+                $"{normalFiles:N0} ISO files, {special:N0} special/hash-only entries, {inspection.HashEntryCount:N0} manifest hashes." +
+                manifestWarningSummary;
+            SkeletonProgressText.Text = hasManifestWarnings ? "Loaded with warning" : "Loaded";
             AppendSkeletonLog($"Detected {kind}.");
             AppendSkeletonLog($"ISO9660 volume: {inspection.VolumeIdentifier}");
             AppendSkeletonLog($"ISO files: {normalFiles:N0}; manifest entries: {inspection.HashEntryCount:N0}; unmapped hashes: {inspection.UnmappedHashEntryCount:N0}.");
+
+            if (inspection.MissingHashEntryCount > 0)
+            {
+                AppendSkeletonLog($"WARNING: The .hash file has no exact pathname/hash entry for {inspection.MissingHashEntryCount:N0} file(s) in the skeleton file table:");
+                foreach (string path in inspection.FilesMissingFromHashManifest.Take(100))
+                    AppendSkeletonLog($"  Missing from .hash: {path}");
+                if (inspection.MissingHashEntryCount > 100)
+                    AppendSkeletonLog($"  ...and {inspection.MissingHashEntryCount - 100:N0} more.");
+
+            }
+
+            if (inspection.UnmappedHashEntryCount > 0)
+            {
+                SkeletonContentEntry[] ignoredEntries = inspection.Entries
+                    .Where(entry => entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry)
+                    .ToArray();
+                AppendSkeletonLog($"WARNING: The .hash file contains {inspection.UnmappedHashEntryCount:N0} entry/entries that are not used by the skeleton and will be ignored:");
+                foreach (SkeletonContentEntry entry in ignoredEntries.Take(100))
+                    AppendSkeletonLog($"  Ignored .hash entry: {entry.Path}");
+                if (ignoredEntries.Length > 100)
+                    AppendSkeletonLog($"  ...and {ignoredEntries.Length - 100:N0} more.");
+            }
+
+            if (hasManifestWarnings)
+            {
+                string warning = inspection.MissingHashEntryCount > 0 && inspection.UnmappedHashEntryCount > 0
+                    ? $"The .hash file is missing entries for {inspection.MissingHashEntryCount:N0} file(s) listed in the skeleton and contains {inspection.UnmappedHashEntryCount:N0} unused entry/entries. The unused entries will be ignored."
+                    : inspection.MissingHashEntryCount > 0
+                        ? $"The .hash file is missing entries for {inspection.MissingHashEntryCount:N0} file(s) listed in the skeleton. Those files cannot be matched."
+                        : $"The .hash file contains {inspection.UnmappedHashEntryCount:N0} entry/entries that are not used by the skeleton. They will be ignored.";
+
+                await ShowMessageAsync(
+                    "DumpToolbox — SkeleTool warning",
+                    warning + " See the activity log for the affected paths.");
+            }
         }
         catch (OperationCanceledException)
         {
@@ -501,7 +545,9 @@ public partial class MainWindow : Window
     private static void SetInitialSkeletonNodeStatus(SkeletonTreeNode node, SkeletonContentEntry entry)
     {
         node.SourcePath = null;
-        if (!entry.CanRestore)
+        if (entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry)
+            node.Status = "Ignored";
+        else if (!entry.CanRestore)
             node.Status = "!";
         else if (entry.IsEmpty)
             node.Status = "✓0";
@@ -523,6 +569,14 @@ public partial class MainWindow : Window
         {
             if (!_skeletonNodes.TryGetValue(entry.Path, out SkeletonTreeNode? node))
                 continue;
+
+            if (entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry)
+            {
+                node.Status = "Ignored";
+                node.SourcePath = null;
+                continue;
+            }
+
             if (_skeletonMatches.TryGetValue(entry.Path, out SkeletonSourceMatch? match))
             {
                 node.Status = match.IsXa ? "✓XA" : "✓";
