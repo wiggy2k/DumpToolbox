@@ -6,9 +6,110 @@ public sealed partial class EdgeRecoveryService
 {
     private const int CddaPcmSampleBytes = 2;
 
+    internal sealed record HeadsTailsSearchStage(string Path, string Label);
+
+    private sealed record HeadsTailsSearchSequenceResult(
+        HailMaryBatchResult Attempt,
+        string SourceLabel,
+        long WindowsTested,
+        long CrcCandidates);
+
     private sealed class InlineProgress<T>(Action<T> callback) : IProgress<T>
     {
         public void Report(T value) => callback(value);
+    }
+
+    internal static IReadOnlyList<HeadsTailsSearchStage> BuildHeadsTailsSearchStages(
+        string currentTrackSource,
+        string fullSource,
+        string corpusSource)
+    {
+        var stages = new List<HeadsTailsSearchStage>();
+        var seen = new HashSet<string>(OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal);
+
+        Add(currentTrackSource, "current track");
+        Add(fullSource, "full source");
+        Add(corpusSource, "AudioHeadsandTails.bin");
+        return stages;
+
+        void Add(string path, string label)
+        {
+            string fullPath = Path.GetFullPath(path);
+            if (seen.Add(fullPath))
+                stages.Add(new HeadsTailsSearchStage(fullPath, label));
+        }
+    }
+
+    private async Task<HeadsTailsSearchSequenceResult> RunHeadsTailsSearchSequenceAsync(
+        string partialFile,
+        long targetLength,
+        uint targetCrc32,
+        string targetMd5,
+        FindEndsMode mode,
+        long trimmedSilenceBytes,
+        string currentTrackSource,
+        string fullSource,
+        string corpusSource,
+        string outputFile,
+        IProgress<string>? activity,
+        List<string> messages,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<HeadsTailsSearchStage> stages = BuildHeadsTailsSearchStages(
+            currentTrackSource, fullSource, corpusSource);
+        long totalWindows = 0;
+        long totalCandidates = 0;
+        HailMaryBatchResult? lastAttempt = null;
+        string lastLabel = stages[^1].Label;
+
+        for (int stageIndex = 0; stageIndex < stages.Count; stageIndex++)
+        {
+            HeadsTailsSearchStage stage = stages[stageIndex];
+            long stageLength = new FileInfo(stage.Path).Length;
+            Report(activity, messages,
+                $"HEADS AND TAILS: search {stageIndex + 1}/{stages.Count}: scanning {stage.Label} ({stageLength:N0} byte(s)).");
+
+            int nextPercent = 5;
+            var batchProgress = new InlineProgress<FindEndsProgress>(p =>
+            {
+                if (p.SearchableOffsets > 0)
+                {
+                    int percent = (int)Math.Floor(p.Fraction * 100.0);
+                    if (percent < nextPercent && p.Offset < p.SearchableOffsets &&
+                        !p.Message.Contains("candidate", StringComparison.OrdinalIgnoreCase))
+                        return;
+                    while (nextPercent <= percent)
+                        nextPercent += 5;
+                }
+                Report(activity, messages, $"{stage.Label}: {p.Message}");
+            });
+
+            HailMaryBatchResult attempt = await _findEnds.RunHailMaryBatchAsync(
+                partialFile,
+                targetLength,
+                targetCrc32,
+                targetMd5,
+                mode,
+                trimmedSilenceBytes,
+                stage.Path,
+                outputFile,
+                batchProgress,
+                cancellationToken).ConfigureAwait(false);
+
+            totalWindows = checked(totalWindows + attempt.WindowsTested);
+            totalCandidates = checked(totalCandidates + attempt.CrcCandidates);
+            lastAttempt = attempt;
+            lastLabel = stage.Label;
+            if (attempt.Found)
+                return new HeadsTailsSearchSequenceResult(attempt, stage.Label, totalWindows, totalCandidates);
+
+            Report(activity, messages,
+                $"HEADS AND TAILS: no verified match in {stage.Label}; continuing to the next source.");
+        }
+
+        return new HeadsTailsSearchSequenceResult(lastAttempt!, lastLabel, totalWindows, totalCandidates);
     }
 
 
@@ -54,54 +155,46 @@ public sealed partial class EdgeRecoveryService
         {
             await CopyRangeAsync(source, partialOffset, partialLength, partialTemp, cancellationToken).ConfigureAwait(false);
 
-            long sourceLength = new FileInfo(searchSource).Length;
             long layoutCount = checked(missingLength * 2);
             Report(activity, messages,
                 $"HEADS AND TAILS: {name}: normal zero-fill and missing-segment Find Ends recovery failed for a proven {missingLength:N0}-byte under-dump at the {side}. " +
                 $"Using the {partialLength:N0} known byte(s) as the anchor and CRC algebra to test all allowed source/zero placements for the missing edge.");
             Report(activity, messages,
-                $"HEADS AND TAILS: {name}: Heads and Tails corpus is {sourceLength:N0} byte(s); {layoutCount:N0} inner/outer zero-placement layout(s) will be represented by {missingLength:N0} distinct source-window length(s) in the batched CRC scan.");
+                $"HEADS AND TAILS: {name}: {layoutCount:N0} inner/outer zero-placement layout(s) will be represented by {missingLength:N0} distinct source-window length(s) in each batched scan. Search order is current track, full source, then AudioHeadsandTails.bin.");
 
-            int nextPercent = 5;
-            var batchProgress = new InlineProgress<FindEndsProgress>(p =>
-            {
-                if (p.SearchableOffsets > 0)
-                {
-                    int percent = (int)Math.Floor(p.Fraction * 100.0);
-                    if (percent < nextPercent && p.Offset < p.SearchableOffsets && !p.Message.Contains("candidate", StringComparison.OrdinalIgnoreCase))
-                        return;
-                    while (nextPercent <= percent)
-                        nextPercent += 5;
-                }
-                Report(activity, messages, p.Message);
-            });
-
-            HailMaryBatchResult attempt = await _findEnds.RunHailMaryBatchAsync(
+            string currentTrackSearchSource = partialOffset == 0 && partialLength == new FileInfo(source).Length
+                ? source
+                : partialTemp;
+            HeadsTailsSearchSequenceResult sequence = await RunHeadsTailsSearchSequenceAsync(
                 partialTemp,
                 target.Size,
                 target.Crc32,
                 expectedMd5,
                 mode,
                 checked((int)missingLength),
+                currentTrackSearchSource,
+                source,
                 searchSource,
                 finalOutput,
-                batchProgress,
+                activity,
+                messages,
                 cancellationToken).ConfigureAwait(false);
+            HailMaryBatchResult attempt = sequence.Attempt;
 
             if (attempt.Found && !string.IsNullOrWhiteSpace(attempt.OutputPath))
             {
                 string fixedMessage =
-                    $"HEADS AND TAILS FIXED: {name}: recovered the proven {missingLength:N0}-byte {side} under-dump using {attempt.SearchableLength:N0} byte(s) from Heads and Tails corpus offset {attempt.SourceOffset:N0}, " +
+                    $"HEADS AND TAILS FIXED: {name}: recovered the proven {missingLength:N0}-byte {side} under-dump using {attempt.SearchableLength:N0} byte(s) from {sequence.SourceLabel} offset {attempt.SourceOffset:N0}, " +
                     $"with {attempt.InnerZeroBytes:N0} inner and {attempt.OuterZeroBytes:N0} outer forced 00 byte(s); CRC32/MD5 verified.";
                 Report(activity, messages, fixedMessage);
-                return new SearchResult(target, expectedStart, true, fixedMessage, attempt.CrcCandidates, attempt.OutputPath);
+                return new SearchResult(target, expectedStart, true, fixedMessage, sequence.CrcCandidates, attempt.OutputPath);
             }
 
             string failed =
-                $"HEADS AND TAILS: {name}: batched CRC search exhausted all allowed source/zero layouts for the proven {missingLength:N0}-byte {side} under-dump; no CRC32/MD5-verified reconstruction exists in the Heads and Tails corpus. " +
-                $"Tested {attempt.WindowsTested:N0} variable-length source windows and found {attempt.CrcCandidates:N0} CRC candidate(s).";
+                $"HEADS AND TAILS: {name}: batched CRC search exhausted the current track, full source, and AudioHeadsandTails.bin for the proven {missingLength:N0}-byte {side} under-dump; no CRC32/MD5-verified reconstruction exists. " +
+                $"Tested {sequence.WindowsTested:N0} variable-length source windows and found {sequence.CrcCandidates:N0} CRC candidate(s).";
             Report(activity, messages, failed);
-            return new SearchResult(target, expectedStart, false, failed, attempt.CrcCandidates);
+            return new SearchResult(target, expectedStart, false, failed, sequence.CrcCandidates);
         }
         finally
         {
@@ -152,68 +245,68 @@ public sealed partial class EdgeRecoveryService
         }
 
         string partialTemp = Path.Combine(outputRoot, $".dumptoolbox_heads_tails_{Guid.NewGuid():N}.partial");
+        string currentTrackTemp = Path.Combine(outputRoot, $".dumptoolbox_heads_tails_{Guid.NewGuid():N}.track");
         string finalOutput = GetRecoveredOutputPath(source, target, targetIndex, outputRoot);
         long totalCandidates = 0;
         try
         {
             await CopyRangeAsync(source, partialOffset, partialLength, partialTemp, cancellationToken).ConfigureAwait(false);
 
-            long sourceLength = new FileInfo(searchSource).Length;
             long layoutCount = checked(silenceBytes * 2);
             Report(activity, messages,
                 $"HEADS AND TAILS: {name}: exact expected length and adjacent anchor are valid, but the track does not hash-match. " +
                 $"Removed {silenceBytes:N0} byte(s) ({silenceBytes / CddaPcmSampleBytes:N0} 16-bit PCM sample(s)) of verified digital silence from the physical {side}, leaving {partialLength:N0} anchored byte(s). " +
-                $"Using CRC algebra to derive all {layoutCount:N0} allowed missing-source/zero-placement targets, then scanning the Heads and Tails corpus blockwise instead of re-reading it once per split.");
+                $"Using CRC algebra to derive all {layoutCount:N0} allowed missing-source/zero-placement targets, then scanning the current track, full source, and AudioHeadsandTails.bin in that order.");
             Report(activity, messages,
-                $"HEADS AND TAILS: {name}: Heads and Tails corpus is {sourceLength:N0} byte(s). Inner/outer zero placements sharing the same source length are checked in one rolling-CRC scan, and distinct lengths are processed in parallel from each in-memory source block.");
+                $"HEADS AND TAILS: {name}: inner/outer zero placements sharing the same source length are checked in one rolling-CRC scan, and distinct lengths are processed in parallel from each in-memory source block.");
 
-            int nextPercent = 5;
-            var batchProgress = new InlineProgress<FindEndsProgress>(p =>
+            string currentTrackSearchSource;
+            if (extentStart == 0 && target.Size == new FileInfo(source).Length)
             {
-                if (p.SearchableOffsets > 0)
-                {
-                    int percent = (int)Math.Floor(p.Fraction * 100.0);
-                    if (percent < nextPercent && p.Offset < p.SearchableOffsets && !p.Message.Contains("candidate", StringComparison.OrdinalIgnoreCase))
-                        return;
+                currentTrackSearchSource = source;
+            }
+            else
+            {
+                await CopyRangeAsync(source, extentStart, target.Size, currentTrackTemp, cancellationToken).ConfigureAwait(false);
+                currentTrackSearchSource = currentTrackTemp;
+            }
 
-                    while (nextPercent <= percent)
-                        nextPercent += 5;
-                }
-
-                Report(activity, messages, p.Message);
-            });
-
-            HailMaryBatchResult attempt = await _findEnds.RunHailMaryBatchAsync(
+            HeadsTailsSearchSequenceResult sequence = await RunHeadsTailsSearchSequenceAsync(
                 partialTemp,
                 target.Size,
                 target.Crc32,
                 expectedMd5,
                 mode,
                 silenceBytes,
+                currentTrackSearchSource,
+                source,
                 searchSource,
                 finalOutput,
-                batchProgress,
+                activity,
+                messages,
                 cancellationToken).ConfigureAwait(false);
+            HailMaryBatchResult attempt = sequence.Attempt;
 
-            totalCandidates = attempt.CrcCandidates;
+            totalCandidates = sequence.CrcCandidates;
             if (attempt.Found && !string.IsNullOrWhiteSpace(attempt.OutputPath))
             {
                 string fixedMessage =
-                    $"HEADS AND TAILS FIXED: {name}: recovered the {side} edge using {attempt.SearchableLength:N0} byte(s) from Heads and Tails corpus offset {attempt.SourceOffset:N0}, " +
+                    $"HEADS AND TAILS FIXED: {name}: recovered the {side} edge using {attempt.SearchableLength:N0} byte(s) from {sequence.SourceLabel} offset {attempt.SourceOffset:N0}, " +
                     $"with {attempt.InnerZeroBytes:N0} inner and {attempt.OuterZeroBytes:N0} outer forced 00 byte(s); CRC32/MD5 verified.";
                 Report(activity, messages, fixedMessage);
                 return new SearchResult(target, extentStart, true, fixedMessage, totalCandidates, attempt.OutputPath);
             }
 
             string failed =
-                $"HEADS AND TAILS: {name}: batched CRC search exhausted all {layoutCount:N0} allowed inner/outer zero-placement layouts across {silenceBytes:N0} trimmed edge byte(s); no CRC32/MD5-verified reconstruction exists in the Heads and Tails corpus. " +
-                $"Tested {attempt.WindowsTested:N0} variable-length source windows and found {attempt.CrcCandidates:N0} CRC candidate(s).";
+                $"HEADS AND TAILS: {name}: batched CRC search exhausted all {layoutCount:N0} allowed inner/outer zero-placement layouts across the current track, full source, and AudioHeadsandTails.bin; no CRC32/MD5-verified reconstruction exists. " +
+                $"Tested {sequence.WindowsTested:N0} variable-length source windows and found {sequence.CrcCandidates:N0} CRC candidate(s).";
             Report(activity, messages, failed);
             return new SearchResult(target, extentStart, false, failed, totalCandidates);
         }
         finally
         {
             TryDelete(partialTemp);
+            TryDelete(currentTrackTemp);
         }
     }
 

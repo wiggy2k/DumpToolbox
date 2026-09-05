@@ -12,6 +12,7 @@ public static class MasteringProfileDetector
     {
         var builder = new MasteringProfileBuilder();
         JolietStandardProfileRule.TryApply(evidence, builder);
+        RoxioBurnEngineProfileRule.TryApply(evidence, builder);
         EasyCdCreatorProfileRule.TryApply(evidence, builder);
         DuplicatePvd150ProfileRule.TryApply(evidence, builder);
         CeQuadratProfileRule.TryApply(evidence, builder);

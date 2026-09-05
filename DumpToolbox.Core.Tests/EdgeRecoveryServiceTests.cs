@@ -7,6 +7,32 @@ public sealed class EdgeRecoveryServiceTests : IDisposable
     public EdgeRecoveryServiceTests() => Directory.CreateDirectory(_root);
 
     [Fact]
+    public void HeadsTailsSearchStagesUseTrackThenFullSourceThenCorpus()
+    {
+        string track = Path.Combine(_root, "track.bin");
+        string full = Path.Combine(_root, "full.bin");
+        string corpus = Path.Combine(_root, "AudioHeadsandTails.bin");
+
+        IReadOnlyList<EdgeRecoveryService.HeadsTailsSearchStage> stages =
+            EdgeRecoveryService.BuildHeadsTailsSearchStages(track, full, corpus);
+
+        Assert.Equal(["current track", "full source", "AudioHeadsandTails.bin"], stages.Select(stage => stage.Label));
+        Assert.Equal([Path.GetFullPath(track), Path.GetFullPath(full), Path.GetFullPath(corpus)], stages.Select(stage => stage.Path));
+    }
+
+    [Fact]
+    public void HeadsTailsSearchStagesDoNotRescanTheSamePhysicalSource()
+    {
+        string source = Path.Combine(_root, "single.bin");
+        string corpus = Path.Combine(_root, "AudioHeadsandTails.bin");
+
+        IReadOnlyList<EdgeRecoveryService.HeadsTailsSearchStage> stages =
+            EdgeRecoveryService.BuildHeadsTailsSearchStages(source, source, corpus);
+
+        Assert.Equal(["current track", "AudioHeadsandTails.bin"], stages.Select(stage => stage.Label));
+    }
+
+    [Fact]
     public async Task RepairAsync_SavesFirstPartialAndLeadingZeroTrimmedCopy()
     {
         string source = WriteSource(

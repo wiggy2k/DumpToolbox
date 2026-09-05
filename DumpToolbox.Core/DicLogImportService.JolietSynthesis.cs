@@ -141,21 +141,25 @@ public sealed partial class DicLogImportService
         }
     }
 
-    private static string ReadJolietApplicationIdentifierForMastering(ReadOnlySpan<byte> descriptor)
+    private static string ReadJolietIdentifierForMastering(ReadOnlySpan<byte> descriptor, int offset, int length)
     {
-        // ECMA-119 application identifier: bytes 575-702 (1-based), offset 574, length 128.
-        // Joliet stores this field as UCS-2BE.  Kept here as evidence extraction; policy
-        // interpretation lives in MasteringProfileDetector.
-        if (descriptor.Length < 702)
+        if (descriptor.Length < offset + length)
             return string.Empty;
         try
         {
-            return Encoding.BigEndianUnicode.GetString(descriptor.Slice(574, 128)).Trim('\0', ' ');
+            return Encoding.BigEndianUnicode.GetString(descriptor.Slice(offset, length)).Trim('\0', ' ');
         }
         catch
         {
             return string.Empty;
         }
+    }
+
+    private static string ReadPrimaryIdentifierForMastering(ReadOnlySpan<byte> descriptor, int offset, int length)
+    {
+        if (descriptor.Length < offset + length)
+            return string.Empty;
+        return Encoding.ASCII.GetString(descriptor.Slice(offset, length)).Trim('\0', ' ');
     }
 
     private static bool TrySynthesizeJolietMetadata(
@@ -199,7 +203,23 @@ public sealed partial class DicLogImportService
         // v0.2.0: central mastering-profile detection.  The synthesizer supplies
         // immutable descriptor/geometry evidence and receives policy only.
         long svdVss = BinaryPrimitives.ReadUInt32LittleEndian(svd.AsSpan(80, 4));
-        string applicationIdentifier = ReadJolietApplicationIdentifierForMastering(svd);
+        string applicationIdentifier = ReadJolietIdentifierForMastering(svd, 574, 128);
+        if (string.IsNullOrWhiteSpace(applicationIdentifier))
+        {
+            byte[]? pvd = metadata
+                .Where(pair => IsPrimaryVolumeDescriptor(pair.Value))
+                .OrderBy(pair => pair.Key)
+                .Select(pair => pair.Value)
+                .FirstOrDefault();
+            string primaryApplicationIdentifier = pvd is null
+                ? string.Empty
+                : ReadPrimaryIdentifierForMastering(pvd, 574, 128);
+            if (!string.IsNullOrWhiteSpace(primaryApplicationIdentifier))
+            {
+                applicationIdentifier = primaryApplicationIdentifier;
+                warnings.Add($"JOLIET: The SVD mastering application identifier is blank; using PVD application identifier '{primaryApplicationIdentifier}' for profile selection while preserving the original descriptor fields.");
+            }
+        }
 
         // Preserve the v0.1.x fallback: volDesc normally carries descriptor order, but
         // some log sets only leave exact descriptor sectors in metadata.
@@ -229,11 +249,16 @@ public sealed partial class DicLogImportService
         IComparer<string>? jolietRecordIdentifierComparer = masteringProfile.JolietRecordOrdering switch
         {
             JolietRecordOrdering.CaseSensitiveUcs2Identifier => StringComparer.Ordinal,
+            JolietRecordOrdering.CaseInsensitiveUcs2Identifier => StringComparer.OrdinalIgnoreCase,
             JolietRecordOrdering.AccentFoldedCaseSensitiveIdentifier => JolietNameComparers.AccentFoldedCaseSensitive,
             _ => null
         };
-        bool orderPathTableByJolietIdentifier =
-            masteringProfile.JolietPathTableOrdering == JolietPathTableOrdering.CaseSensitiveUcs2Identifier;
+        IComparer<string>? jolietPathTableIdentifierComparer = masteringProfile.JolietPathTableOrdering switch
+        {
+            JolietPathTableOrdering.CaseSensitiveUcs2Identifier => StringComparer.Ordinal,
+            JolietPathTableOrdering.CaseInsensitiveUcs2Identifier => StringComparer.OrdinalIgnoreCase,
+            _ => null
+        };
         byte? supplementaryRootXaFileNumber = masteringProfile.SupplementaryRootXaFileNumber;
 
         if (masteringProfile.MatchedRules.Count > 0)
@@ -374,7 +399,7 @@ public sealed partial class DicLogImportService
         if (directoryMetadata is not null && volume.PrimaryPathTableRecords.Count > 0)
         {
             var nodeByPrimaryExtent = new Dictionary<long, JolietDirectoryNode>();
-            foreach (JolietDirectoryNode node in FlattenJolietDirectories(root, orderPathTableByJolietIdentifier))
+            foreach (JolietDirectoryNode node in FlattenJolietDirectories(root, jolietPathTableIdentifierComparer))
             {
                 if (node.PrimaryExtentLba is long extent)
                     nodeByPrimaryExtent.TryAdd(extent, node);
@@ -430,7 +455,7 @@ public sealed partial class DicLogImportService
                 warnings.Add($"JOLIET: Restored {addedEmptyDirectories:N0} empty directory node(s) from DIC primary path-table evidence that could not be represented by the extracted source-file tree.");
         }
 
-        List<JolietDirectoryNode> directories = FlattenJolietDirectories(root, orderPathTableByJolietIdentifier);
+        List<JolietDirectoryNode> directories = FlattenJolietDirectories(root, jolietPathTableIdentifierComparer);
         if (directories.Count == 0)
             return false;
 
@@ -482,8 +507,8 @@ public sealed partial class DicLogImportService
             masteringProfile.JolietPathTableOrdering == JolietPathTableOrdering.CaseSensitiveUcs2Identifier)
         {
             jolietRecordIdentifierComparer = null;
-            orderPathTableByJolietIdentifier = false;
-            directories = FlattenJolietDirectories(root, orderByJolietIdentifier: false);
+            jolietPathTableIdentifierComparer = null;
+            directories = FlattenJolietDirectories(root);
             warnings.Add(
                 "JOLIET: Preserved primary ISO9660 path-table and directory-record order because DIC proves the paired primary/supplementary mastering layout: " +
                 "the non-sector-rounded SVD root starts immediately after the primary root allocation and every generated directory maps one-to-one to a primary path-table extent.");
@@ -942,7 +967,7 @@ public sealed partial class DicLogImportService
             JolietDirectoryNode strippedRoot = BuildJolietDirectoryTree(
                 volume.Files, volume.DefaultRecordingTime, directoryMetadata, inheritPrimarySystemUse: false);
             ApplySupplementaryRootSystemUseFallback(strippedRoot);
-            List<JolietDirectoryNode> strippedDirectories = FlattenJolietDirectories(strippedRoot, orderPathTableByJolietIdentifier);
+            List<JolietDirectoryNode> strippedDirectories = FlattenJolietDirectories(strippedRoot, jolietPathTableIdentifierComparer);
 
             appendFileVersionSuffix = false;
             foreach (JolietDirectoryNode directory in strippedDirectories)
@@ -1045,7 +1070,7 @@ public sealed partial class DicLogImportService
                     JolietDirectoryNode strippedRoot = BuildJolietDirectoryTree(
                         volume.Files, volume.DefaultRecordingTime, directoryMetadata, inheritPrimarySystemUse: false);
                     ApplySupplementaryRootSystemUseFallback(strippedRoot);
-                    List<JolietDirectoryNode> strippedDirectories = FlattenJolietDirectories(strippedRoot, orderPathTableByJolietIdentifier);
+                    List<JolietDirectoryNode> strippedDirectories = FlattenJolietDirectories(strippedRoot, jolietPathTableIdentifierComparer);
                     foreach (JolietDirectoryNode directory in strippedDirectories)
                         directory.DataLength = ComputeJolietDirectoryDataLength(directory, appendFileVersionSuffix: false, identifierComparer: jolietRecordIdentifierComparer, roundToSector: !preserveExactDirectoryByteLengths);
 
@@ -1088,7 +1113,7 @@ public sealed partial class DicLogImportService
                     root = BuildJolietDirectoryTree(
                         volume.Files, volume.DefaultRecordingTime, directoryMetadata, inheritPrimarySystemUse: false);
                     ApplySupplementaryRootSystemUseFallback(root);
-                    directories = FlattenJolietDirectories(root, orderPathTableByJolietIdentifier);
+                    directories = FlattenJolietDirectories(root, jolietPathTableIdentifierComparer);
                     foreach (JolietDirectoryNode directory in directories)
                         directory.DataLength = ComputeJolietDirectoryDataLength(directory, appendFileVersionSuffix, jolietRecordIdentifierComparer, roundToSector: !preserveExactDirectoryByteLengths);
                     TryAllocateDefaultContiguous(root, directories, out long finalNeeded);
@@ -1507,7 +1532,7 @@ public sealed partial class DicLogImportService
 
     private static List<JolietDirectoryNode> FlattenJolietDirectories(
         JolietDirectoryNode root,
-        bool orderByJolietIdentifier = false)
+        IComparer<string>? jolietIdentifierComparer = null)
     {
         var result = new List<JolietDirectoryNode>();
         var queue = new Queue<JolietDirectoryNode>();
@@ -1522,9 +1547,9 @@ public sealed partial class DicLogImportService
             // Joliet requires each hierarchy level to be ordered by its visible,
             // case-sensitive UCS-2 identifier. A mastering profile may retain primary
             // ISO9660 numbering only when independent evidence proves that exception.
-            IEnumerable<JolietDirectoryNode> children = orderByJolietIdentifier
+            IEnumerable<JolietDirectoryNode> children = jolietIdentifierComparer is not null
                 ? current.Children.Values
-                    .OrderBy(node => node.Name, StringComparer.Ordinal)
+                    .OrderBy(node => node.Name, jolietIdentifierComparer)
                     .ThenBy(node => GetIsoFilename(node.PrimaryPath ?? node.Name), StringComparer.Ordinal)
                 : current.Children.Values
                     .OrderBy(node => GetIsoFilename(node.PrimaryPath ?? node.Name), StringComparer.Ordinal)

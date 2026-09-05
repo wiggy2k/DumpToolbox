@@ -191,35 +191,55 @@ FROM volume_descriptors v JOIN images i ON i.id=v.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
 ORDER BY s.source_path,i.display_name,v.descriptor_sequence;").ConfigureAwait(false);
         await ExportAsync("joliet_directory_record_order.csv",
-            "Source,Image,ApplicationId,EscapeSequence,ParentPath,DirectoryExtent,RecordIndex,RecordOffset,Path,Identifier,IdentifierBytesHex,Extent,Length,Flags,IsDirectory",
-            @"SELECT s.source_path,i.display_name,COALESCE(v.application_id,''),COALESCE(v.escape_sequence,''),
+            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,EscapeSequence,ParentPath,DirectoryExtent,RecordIndex,RecordOffset,Path,Identifier,IdentifierBytesHex,Extent,Length,Flags,IsDirectory",
+            @"SELECT s.source_path,i.display_name,
+COALESCE(pvd.system_id,''),COALESCE(pvd.application_id,''),COALESCE(pvd.data_preparer_id,''),COALESCE(pvd.publisher_id,''),
+COALESCE(svd.system_id,''),COALESCE(svd.application_id,''),COALESCE(svd.data_preparer_id,''),COALESCE(svd.publisher_id,''),COALESCE(svd.escape_sequence,''),
 f.parent_path,f.directory_extent,f.record_index,f.record_offset,f.path,f.identifier,hex(f.identifier_bytes),
 f.extent,f.length,f.flags,f.is_directory
 FROM filesystem_records f JOIN images i ON i.id=f.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
-LEFT JOIN volume_descriptors v ON v.id=(SELECT id FROM volume_descriptors candidate
+LEFT JOIN volume_descriptors pvd ON pvd.id=(SELECT id FROM volume_descriptors candidate
+ WHERE candidate.image_id=i.id AND candidate.namespace='ISO9660' ORDER BY candidate.descriptor_sequence LIMIT 1)
+LEFT JOIN volume_descriptors svd ON svd.id=(SELECT id FROM volume_descriptors candidate
  WHERE candidate.image_id=i.id AND candidate.namespace='JOLIET' ORDER BY candidate.descriptor_sequence LIMIT 1)
 WHERE f.namespace='JOLIET'
 ORDER BY s.source_path,i.display_name,f.directory_extent,f.record_index;").ConfigureAwait(false);
         await ExportAsync("joliet_path_table_order.csv",
-            "Source,Image,ApplicationId,EscapeSequence,TableKind,TableLBA,RecordIndex,RecordOffset,DirectoryNumber,ParentDirectoryNumber,Extent,Identifier,IdentifierBytesHex",
-            @"SELECT s.source_path,i.display_name,COALESCE(v.application_id,''),COALESCE(v.escape_sequence,''),
+            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,EscapeSequence,AliasedPathTable,TableKind,TableLBA,RecordIndex,RecordOffset,DirectoryNumber,ParentDirectoryNumber,Extent,Identifier,IdentifierBytesHex",
+            @"SELECT s.source_path,i.display_name,
+COALESCE(pvd.system_id,''),COALESCE(pvd.application_id,''),COALESCE(pvd.data_preparer_id,''),COALESCE(pvd.publisher_id,''),
+COALESCE(svd.system_id,''),COALESCE(svd.application_id,''),COALESCE(svd.data_preparer_id,''),COALESCE(svd.publisher_id,''),COALESCE(svd.escape_sequence,''),
+CASE WHEN ((CASE WHEN svd.type_l_lba=p.table_lba THEN 1 ELSE 0 END) +
+ (CASE WHEN svd.optional_type_l_lba=p.table_lba THEN 1 ELSE 0 END) +
+ (CASE WHEN svd.type_m_lba=p.table_lba THEN 1 ELSE 0 END) +
+ (CASE WHEN svd.optional_type_m_lba=p.table_lba THEN 1 ELSE 0 END)) > 1 THEN 1 ELSE 0 END,
 p.table_kind,p.table_lba,p.record_index,p.record_offset,p.directory_number,p.parent_directory_number,p.extent,
 p.identifier,hex(p.identifier_bytes)
 FROM path_table_records p JOIN images i ON i.id=p.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
-LEFT JOIN volume_descriptors v ON v.id=(SELECT id FROM volume_descriptors candidate
+LEFT JOIN volume_descriptors pvd ON pvd.id=(SELECT id FROM volume_descriptors candidate
+ WHERE candidate.image_id=i.id AND candidate.namespace='ISO9660' ORDER BY candidate.descriptor_sequence LIMIT 1)
+LEFT JOIN volume_descriptors svd ON svd.id=(SELECT id FROM volume_descriptors candidate
  WHERE candidate.image_id=i.id AND candidate.namespace='JOLIET' ORDER BY candidate.descriptor_sequence LIMIT 1)
 WHERE p.namespace='JOLIET'
 ORDER BY s.source_path,i.display_name,p.table_kind,p.record_index;").ConfigureAwait(false);
         await ExportAsync("joliet_iso9660_record_pairs.csv",
-            "Source,Image,ApplicationId,ISOPath,JolietPath,Extent,Length,Flags,ISODirectoryExtent,ISORecordIndex,ISORecordOffset,JolietDirectoryExtent,JolietRecordIndex,JolietRecordOffset",
-            @"SELECT s.source_path,i.display_name,COALESCE(v.application_id,''),p.iso_path,p.joliet_path,p.extent,
-p.length,p.flags,p.iso_directory_extent,p.iso_record_index,p.iso_record_offset,p.joliet_directory_extent,
+            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,ISOPath,JolietPath,Extent,Length,Flags,ISOToJolietCandidates,JolietToISOCandidates,ISODirectoryExtent,ISORecordIndex,ISORecordOffset,JolietDirectoryExtent,JolietRecordIndex,JolietRecordOffset",
+            @"SELECT s.source_path,i.display_name,
+COALESCE(pvd.system_id,''),COALESCE(pvd.application_id,''),COALESCE(pvd.data_preparer_id,''),COALESCE(pvd.publisher_id,''),
+COALESCE(svd.system_id,''),COALESCE(svd.application_id,''),COALESCE(svd.data_preparer_id,''),COALESCE(svd.publisher_id,''),
+p.iso_path,p.joliet_path,p.extent,
+p.length,p.flags,
+COUNT(*) OVER(PARTITION BY p.image_id,p.iso_path,p.extent,p.length,p.flags),
+COUNT(*) OVER(PARTITION BY p.image_id,p.joliet_path,p.extent,p.length,p.flags),
+p.iso_directory_extent,p.iso_record_index,p.iso_record_offset,p.joliet_directory_extent,
 p.joliet_record_index,p.joliet_record_offset
 FROM namespace_record_pairs p JOIN images i ON i.id=p.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
-LEFT JOIN volume_descriptors v ON v.id=(SELECT id FROM volume_descriptors candidate
+LEFT JOIN volume_descriptors pvd ON pvd.id=(SELECT id FROM volume_descriptors candidate
+ WHERE candidate.image_id=i.id AND candidate.namespace='ISO9660' ORDER BY candidate.descriptor_sequence LIMIT 1)
+LEFT JOIN volume_descriptors svd ON svd.id=(SELECT id FROM volume_descriptors candidate
  WHERE candidate.image_id=i.id AND candidate.namespace='JOLIET' ORDER BY candidate.descriptor_sequence LIMIT 1)
 ORDER BY s.source_path,i.display_name,p.iso_directory_extent,p.iso_record_index;").ConfigureAwait(false);
         return paths;

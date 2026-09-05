@@ -4,13 +4,15 @@ public enum JolietRecordOrdering
 {
     PreservePrimaryRecordOrder,
     CaseSensitiveUcs2Identifier,
+    CaseInsensitiveUcs2Identifier,
     AccentFoldedCaseSensitiveIdentifier
 }
 
 public enum JolietPathTableOrdering
 {
     PreservePrimaryDirectoryOrder,
-    CaseSensitiveUcs2Identifier
+    CaseSensitiveUcs2Identifier,
+    CaseInsensitiveUcs2Identifier
 }
 
 /// <summary>

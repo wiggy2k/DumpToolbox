@@ -102,22 +102,41 @@ public sealed partial class DiscEvidenceService
         string names = Path.Combine(outputDirectory, "joliet_iso9660_observations.csv");
         await using (var w = new StreamWriter(names, false, new UTF8Encoding(false)))
         {
-            await w.WriteLineAsync("SystemId,ApplicationId,DataPreparerId,PublisherId,Media,ISOPath,JolietPath,Extent,Length,Flags");
+            await w.WriteLineAsync("Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,Media,ISOPath,JolietPath,Extent,Length,Flags,ISOToJolietCandidates,JolietToISOCandidates");
             using SqliteCommand cmd = db.CreateCommand();
-            cmd.CommandText = @"SELECT d.system_id,d.application_id,d.data_preparer_id,d.publisher_id,i.media_type,n.iso_path,n.joliet_path,n.extent,n.length,n.flags FROM name_pairs n JOIN images i ON i.id=n.image_id JOIN descriptors d ON d.image_id=i.id AND d.namespace='ISO9660' ORDER BY d.application_id,n.iso_path";
+            cmd.CommandText = @"SELECT s.source_path,i.display_name,
+COALESCE(pvd.system_id,''),COALESCE(pvd.application_id,''),COALESCE(pvd.data_preparer_id,''),COALESCE(pvd.publisher_id,''),
+COALESCE(svd.system_id,''),COALESCE(svd.application_id,''),COALESCE(svd.data_preparer_id,''),COALESCE(svd.publisher_id,''),
+i.media_type,n.iso_path,n.joliet_path,n.extent,n.length,n.flags,
+COUNT(*) OVER(PARTITION BY n.image_id,n.iso_path,n.extent,n.length,n.flags),
+COUNT(*) OVER(PARTITION BY n.image_id,n.joliet_path,n.extent,n.length,n.flags)
+FROM name_pairs n JOIN images i ON i.id=n.image_id
+LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
+LEFT JOIN descriptors pvd ON pvd.id=(SELECT id FROM descriptors candidate WHERE candidate.image_id=i.id AND candidate.namespace='ISO9660' LIMIT 1)
+LEFT JOIN descriptors svd ON svd.id=(SELECT id FROM descriptors candidate WHERE candidate.image_id=i.id AND candidate.namespace='JOLIET' LIMIT 1)
+ORDER BY s.source_path,i.display_name,n.iso_path";
             await using SqliteDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await r.ReadAsync(ct).ConfigureAwait(false))
-                await w.WriteLineAsync(string.Join(',', Enumerable.Range(0,10).Select(i => Csv(r.IsDBNull(i)?"":Convert.ToString(r.GetValue(i))!))));
+                await w.WriteLineAsync(string.Join(',', Enumerable.Range(0,r.FieldCount).Select(i => Csv(r.IsDBNull(i)?"":Convert.ToString(r.GetValue(i))!))));
         }
         string eof = Path.Combine(outputDirectory, "eof_slack_observations.csv");
         await using (var w = new StreamWriter(eof, false, new UTF8Encoding(false)))
         {
-            await w.WriteLineAsync("SystemId,ApplicationId,DataPreparerId,PublisherId,Media,Path,Extent,Length,TailOffset,TailLength,Status,NonZeroBytes,MatchCount,DeltaSectors");
+            await w.WriteLineAsync("Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,Media,Path,Extent,Length,TailOffset,TailLength,Status,NonZeroBytes,MatchCount,UniqueEarlierMatch,DeltaSectors");
             using SqliteCommand cmd = db.CreateCommand();
-            cmd.CommandText = @"SELECT d.system_id,d.application_id,d.data_preparer_id,d.publisher_id,i.media_type,e.path,e.extent,e.length,e.tail_offset,e.tail_length,e.status,e.nonzero_bytes,e.match_count,e.delta_sectors FROM eof_observations e JOIN images i ON i.id=e.image_id JOIN descriptors d ON d.image_id=i.id AND d.namespace='ISO9660' ORDER BY d.application_id,e.path";
+            cmd.CommandText = @"SELECT s.source_path,i.display_name,
+COALESCE(pvd.system_id,''),COALESCE(pvd.application_id,''),COALESCE(pvd.data_preparer_id,''),COALESCE(pvd.publisher_id,''),
+COALESCE(svd.system_id,''),COALESCE(svd.application_id,''),COALESCE(svd.data_preparer_id,''),COALESCE(svd.publisher_id,''),
+i.media_type,e.path,e.extent,e.length,e.tail_offset,e.tail_length,e.status,e.nonzero_bytes,e.match_count,
+CASE WHEN e.match_count=1 THEN 1 ELSE 0 END,e.delta_sectors
+FROM eof_observations e JOIN images i ON i.id=e.image_id
+LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
+LEFT JOIN descriptors pvd ON pvd.id=(SELECT id FROM descriptors candidate WHERE candidate.image_id=i.id AND candidate.namespace='ISO9660' LIMIT 1)
+LEFT JOIN descriptors svd ON svd.id=(SELECT id FROM descriptors candidate WHERE candidate.image_id=i.id AND candidate.namespace='JOLIET' LIMIT 1)
+ORDER BY s.source_path,i.display_name,e.path";
             await using SqliteDataReader r = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await r.ReadAsync(ct).ConfigureAwait(false))
-                await w.WriteLineAsync(string.Join(',', Enumerable.Range(0,14).Select(i => Csv(r.IsDBNull(i)?"":Convert.ToString(r.GetValue(i))!))));
+                await w.WriteLineAsync(string.Join(',', Enumerable.Range(0,r.FieldCount).Select(i => Csv(r.IsDBNull(i)?"":Convert.ToString(r.GetValue(i))!))));
         }
         IReadOnlyList<string> ordering = await ExportOrderingEvidenceAsync(db, outputDirectory, ct).ConfigureAwait(false);
         log?.Report($"Analysis exports written: {names}; {eof}; {string.Join("; ", ordering)}");
@@ -150,10 +169,10 @@ public sealed partial class DiscEvidenceService
         if (joliet is not null)
             pathTables.AddRange(await DiscMasteringOrderingExtractor.ReadPathTablesAsync(
                 reader.ReadBytesAsync, joliet, ct).ConfigureAwait(false));
-        var jolGroups = jol.GroupBy(x => (x.Extent,x.Length,x.IsDirectory)).ToDictionary(g=>g.Key,g=>g.ToList());
+        var jolGroups = jol.GroupBy(x => (x.Extent,x.Length,x.IsDirectory,IsAssociated:(x.Flags & 1) != 0)).ToDictionary(g=>g.Key,g=>g.ToList());
         var pairs = new List<NamePair>();
         foreach (DiscFilesystemRecordEvidence r in iso)
-            if (jolGroups.TryGetValue((r.Extent,r.Length,r.IsDirectory), out var matches))
+            if (jolGroups.TryGetValue((r.Extent,r.Length,r.IsDirectory,IsAssociated:(r.Flags & 1) != 0), out var matches))
                 foreach (DiscFilesystemRecordEvidence j in matches)
                     pairs.Add(new NamePair(r.Path, j.Path, r.Extent, r.Length, r.Flags,
                         r.DirectoryExtent, r.RecordOffset, r.RecordIndex,

@@ -95,4 +95,22 @@ public sealed class MasteringProfileDetectorTests
         Assert.Equal(JolietPathTableOrdering.PreservePrimaryDirectoryOrder, profile.JolietPathTableOrdering);
     }
 
+    [Fact]
+    public void RoxioBurnEngine21SelectsCaseInsensitiveJolietOrdering()
+    {
+        var evidence = new MasteringEvidence(
+            "Roxio Burn Engine 2.1",
+            Array.Empty<long>(),
+            Array.Empty<long>(),
+            0,
+            false,
+            "%/E");
+
+        IMasteringProfile profile = MasteringProfileDetector.Detect(evidence);
+
+        Assert.Equal(JolietRecordOrdering.CaseInsensitiveUcs2Identifier, profile.JolietRecordOrdering);
+        Assert.Equal(JolietPathTableOrdering.CaseInsensitiveUcs2Identifier, profile.JolietPathTableOrdering);
+        Assert.Contains("Roxio Burn Engine 2.1", profile.Name, StringComparison.Ordinal);
+    }
+
 }

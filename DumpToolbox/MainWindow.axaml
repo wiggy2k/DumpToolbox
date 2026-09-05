@@ -640,7 +640,7 @@
         </StackPanel>
 
         <Grid Grid.Row="3" ColumnDefinitions="Auto,130,Auto" ColumnSpacing="8">
-          <CheckBox x:Name="ConcatPaddingCheckBox" Grid.Column="0" Content="Zero padding between files" VerticalAlignment="Center"/>
+          <CheckBox x:Name="ConcatPaddingCheckBox" Grid.Column="0" Content="Insert padding between files" VerticalAlignment="Center"/>
           <TextBox x:Name="ConcatPaddingBytesBox" Grid.Column="1" Text="10240" Watermark="Bytes" VerticalContentAlignment="Center"/>
           <CheckBox x:Name="ConcatBoundaryCheckBox" Grid.Column="2" Content="Skip unsafe boundaries" IsChecked="True" VerticalAlignment="Center"/>
         </Grid>

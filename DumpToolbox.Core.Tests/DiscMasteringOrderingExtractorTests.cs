@@ -65,6 +65,24 @@ public sealed class DiscMasteringOrderingExtractorTests
     }
 
     [Fact]
+    public async Task AliasedEndianPointersAreDecodedOnlyInTheProvenByteOrder()
+    {
+        byte[] svd = Descriptor(2, "%/E", "MAGICISO", 10_000, 30, 2048, 44, 40, 40, 40, []);
+        BinaryPrimitives.WriteUInt32BigEndian(svd.AsSpan(152, 4), 40);
+        DiscVolumeDescriptorEvidence descriptor = (await DiscMasteringOrderingExtractor.ReadDescriptorsAsync(
+            (lba, _) => Task.FromResult(lba == 16 ? svd : Descriptor(255, string.Empty, string.Empty, 0, 0, 0, 0, 0, 0, 0, [])),
+            default)).Single(item => item.Namespace == "JOLIET");
+
+        byte[] littlePathTable = PathTable(bigEndian: false);
+        List<DiscPathTableRecordEvidence> records = await DiscMasteringOrderingExtractor.ReadPathTablesAsync(
+            (_, _, _) => Task.FromResult(littlePathTable), descriptor, default);
+
+        Assert.Equal(3, records.Count);
+        Assert.All(records, record => Assert.Contains("ALIASED_L", record.TableKind, StringComparison.Ordinal));
+        Assert.Equal(["/", "beta", "Alpha"], records.Select(record => record.Identifier));
+    }
+
+    [Fact]
     public async Task EvidenceDatabaseMigratesAndCreatesOrderingExports()
     {
         string root = Path.Combine(Path.GetTempPath(), $"DiscOrderingTests_{Guid.NewGuid():N}");
@@ -92,6 +110,10 @@ WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_
             Assert.True(File.Exists(Path.Combine(exports, "joliet_directory_record_order.csv")));
             Assert.True(File.Exists(Path.Combine(exports, "joliet_path_table_order.csv")));
             Assert.True(File.Exists(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")));
+            Assert.StartsWith("Source,Image,PVDSystemId", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_directory_record_order.csv")), StringComparison.Ordinal);
+            Assert.Contains("AliasedPathTable", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_path_table_order.csv")), StringComparison.Ordinal);
+            Assert.Contains("ISOToJolietCandidates", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")), StringComparison.Ordinal);
+            Assert.StartsWith("Source,Image,PVDSystemId", await File.ReadAllTextAsync(Path.Combine(exports, "eof_slack_observations.csv")), StringComparison.Ordinal);
         }
         finally
         {

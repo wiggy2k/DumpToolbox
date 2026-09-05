@@ -170,11 +170,35 @@ internal static class DiscMasteringOrderingExtractor
             ("M", descriptor.TypeMPathTableLba, true),
             ("M_OPTIONAL", descriptor.OptionalTypeMPathTableLba, true)
         ];
-        foreach ((string kind, uint lba, bool bigEndian) in tables)
+        foreach (IGrouping<uint, (string Kind, uint Lba, bool BigEndian)> tableGroup in tables
+                     .Where(table => table.Lba != 0)
+                     .GroupBy(table => table.Lba))
         {
-            if (lba == 0)
-                continue;
+            (string Kind, uint Lba, bool BigEndian)[] aliases = tableGroup.ToArray();
+            uint lba = tableGroup.Key;
             byte[] bytes = await readBytes(lba, descriptor.PathTableSize, cancellationToken).ConfigureAwait(false);
+            bool bigEndian = aliases[0].BigEndian;
+            string kind = aliases[0].Kind;
+
+            if (aliases.Select(alias => alias.BigEndian).Distinct().Count() > 1)
+            {
+                bool littleEndianRootMatches = PathTableRootMatches(bytes, descriptor.RootExtent, bigEndian: false);
+                bool bigEndianRootMatches = PathTableRootMatches(bytes, descriptor.RootExtent, bigEndian: true);
+
+                // Some mastering programs place every L/M pointer on the same physical
+                // table. Decode it only in the byte order proved by its root entry; the
+                // opposite interpretation produces plausible-looking but false rows.
+                if (littleEndianRootMatches == bigEndianRootMatches)
+                    continue;
+
+                bigEndian = bigEndianRootMatches;
+                kind = $"{string.Join("+", aliases.Select(alias => alias.Kind))}_ALIASED_{(bigEndian ? "M" : "L")}";
+            }
+            else if (aliases.Length > 1)
+            {
+                kind = $"{string.Join("+", aliases.Select(alias => alias.Kind))}_ALIASED";
+            }
+
             int offset = 0;
             int recordIndex = 0;
             while (offset + 8 <= bytes.Length)
@@ -202,6 +226,19 @@ internal static class DiscMasteringOrderingExtractor
             }
         }
         return result;
+    }
+
+    private static bool PathTableRootMatches(ReadOnlySpan<byte> bytes, uint expectedRootExtent, bool bigEndian)
+    {
+        if (bytes.Length < 9 || bytes[0] != 1 || bytes[8] != 0)
+            return false;
+        uint extent = bigEndian
+            ? BinaryPrimitives.ReadUInt32BigEndian(bytes.Slice(2, 4))
+            : BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(2, 4));
+        ushort parent = bigEndian
+            ? BinaryPrimitives.ReadUInt16BigEndian(bytes.Slice(6, 2))
+            : BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(6, 2));
+        return extent == expectedRootExtent && parent == 1;
     }
 
     private static DiscVolumeDescriptorEvidence ParseDescriptor(
