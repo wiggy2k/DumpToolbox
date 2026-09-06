@@ -8,13 +8,15 @@ public sealed record DiscEvidenceProgress(string Phase, string Source, int Compl
 
 public sealed partial class DiscEvidenceService
 {
-    public const int EvidenceSchema = 3;
+    public const int EvidenceSchema = 4;
     private readonly SkeletoolCatalogueService _catalogue;
+    private readonly JolietNamingRuleSet _namingRules;
     public string DatabasePath { get; }
 
     public DiscEvidenceService(SkeletoolCatalogueService catalogue, string? databasePath = null)
     {
         _catalogue = catalogue;
+        _namingRules = JolietNamingRuleService.Load();
         DatabasePath = Path.GetFullPath(databasePath ?? Path.Combine(AppContext.BaseDirectory, "disc_mastering_evidence.sqlite"));
     }
 
@@ -169,14 +171,26 @@ ORDER BY s.source_path,i.display_name,e.path";
         if (joliet is not null)
             pathTables.AddRange(await DiscMasteringOrderingExtractor.ReadPathTablesAsync(
                 reader.ReadBytesAsync, joliet, ct).ConfigureAwait(false));
+        JolietNamingProfile? namingProfile = JolietNamingRuleService.FindMatch(_namingRules,
+            new IsoMasteringIdentity(primary.SystemId, primary.ApplicationId, primary.DataPreparerId));
+        var jolByGeometry = jol.GroupBy(CandidateGeometry).ToDictionary(group => group.Key, group => group.ToArray());
+        var isoByGeometry = iso.GroupBy(CandidateGeometry).ToDictionary(group => group.Key, group => group.ToArray());
+        var forwardCounts = iso.ToDictionary(RecordKey, record => CountCandidates(record, jolByGeometry, sourceIsJoliet: true, namingProfile));
+        var reverseCounts = jol.ToDictionary(RecordKey, record => CountCandidates(record, isoByGeometry, sourceIsJoliet: false, namingProfile));
         var jolGroups = jol.GroupBy(x => (x.Extent,x.Length,x.IsDirectory,IsAssociated:(x.Flags & 1) != 0)).ToDictionary(g=>g.Key,g=>g.ToList());
         var pairs = new List<NamePair>();
         foreach (DiscFilesystemRecordEvidence r in iso)
             if (jolGroups.TryGetValue((r.Extent,r.Length,r.IsDirectory,IsAssociated:(r.Flags & 1) != 0), out var matches))
                 foreach (DiscFilesystemRecordEvidence j in matches)
+                {
+                    DiscEvidenceCandidateCounts forward = forwardCounts[RecordKey(r)];
+                    DiscEvidenceCandidateCounts reverse = reverseCounts[RecordKey(j)];
                     pairs.Add(new NamePair(r.Path, j.Path, r.Extent, r.Length, r.Flags,
+                        r.RecordingTime, r.RawRecordingTime, j.RecordingTime, j.RawRecordingTime,
+                        forward.BeforeTimestamp, forward.AfterTimestamp, reverse.BeforeTimestamp, reverse.AfterTimestamp,
                         r.DirectoryExtent, r.RecordOffset, r.RecordIndex,
                         j.DirectoryExtent, j.RecordOffset, j.RecordIndex));
+                }
         var eofs = new List<EofObservation>();
         var pendingTails = new List<PendingTail>();
         foreach (DiscFilesystemRecordEvidence f in iso.Where(x=>!x.IsDirectory && x.Length>0))
@@ -208,6 +222,49 @@ ORDER BY s.source_path,i.display_name,e.path";
         log?.Report($"    media={media}; udf={(udf?"yes":"no")}; descriptors={descriptors.Count:N0}; ISO={iso.Count:N0}; Joliet={jol.Count:N0}; path-table records={pathTables.Count:N0}; pairs={pairs.Count:N0}; EOF={eofs.Count:N0}");
         return new(media,udf,primary,joliet,descriptors,iso,jol,pathTables,pairs,eofs);
     }
+
+    private static (uint Length, bool IsDirectory, bool IsAssociated, int PathDepth) CandidateGeometry(DiscFilesystemRecordEvidence record)
+        => (record.Length, record.IsDirectory, (record.Flags & 1) != 0,
+            record.Path.Count(character => character == '/'));
+
+    private static (uint DirectoryExtent, int RecordOffset, int RecordIndex) RecordKey(DiscFilesystemRecordEvidence record)
+        => (record.DirectoryExtent, record.RecordOffset, record.RecordIndex);
+
+    private static DiscEvidenceCandidateCounts CountCandidates(
+        DiscFilesystemRecordEvidence target,
+        IReadOnlyDictionary<(uint Length, bool IsDirectory, bool IsAssociated, int PathDepth), DiscFilesystemRecordEvidence[]> sourcesByGeometry,
+        bool sourceIsJoliet,
+        JolietNamingProfile? namingProfile)
+    {
+        if (!sourcesByGeometry.TryGetValue(CandidateGeometry(target), out DiscFilesystemRecordEvidence[]? sameGeometry))
+            return new DiscEvidenceCandidateCounts(0, target.RecordingTime is null ? null : 0);
+
+        return CountCandidatesForEvidence(target, sameGeometry, sourceIsJoliet, namingProfile);
+    }
+
+    internal static DiscEvidenceCandidateCounts CountCandidatesForEvidence(
+        DiscFilesystemRecordEvidence target,
+        IEnumerable<DiscFilesystemRecordEvidence> sameGeometry,
+        bool sourceIsJoliet,
+        JolietNamingProfile? namingProfile)
+    {
+        DiscFilesystemRecordEvidence[] projected = sameGeometry.Where(source => sourceIsJoliet
+                ? SkeletonResurrectionService.EvidenceJolietPathProjectsToIsoPath(
+                    source.Path, target.Path, target.IsDirectory, namingProfile)
+                : SkeletonResurrectionService.EvidenceJolietPathProjectsToIsoPath(
+                    target.Path, source.Path, source.IsDirectory, namingProfile))
+            .ToArray();
+
+        int? afterTimestamp = target.RecordingTime is DateTimeOffset targetTime
+            ? projected.Count(source => source.RecordingTime is DateTimeOffset sourceTime &&
+                                        RecordingTimesEquivalent(targetTime, sourceTime))
+            : null;
+        return new DiscEvidenceCandidateCounts(projected.Length, afterTimestamp);
+    }
+
+    private static bool RecordingTimesEquivalent(DateTimeOffset left, DateTimeOffset right)
+        => Math.Abs((left.ToUniversalTime() - right.ToUniversalTime()).TotalSeconds) < 1.0 ||
+           Math.Abs((left.DateTime - right.DateTime).TotalSeconds) < 1.0;
 
     private static async Task<bool> DetectUdfAsync(SectorReader reader, CancellationToken ct)
     {
@@ -257,6 +314,10 @@ CREATE INDEX IF NOT EXISTS ix_name_pairs_image ON name_pairs(image_id); CREATE I
 
     private static string Csv(string s)=>"\""+s.Replace("\"","\"\"")+"\"";
     private sealed record NamePair(string IsoPath,string JolietPath,uint Extent,uint Length,byte Flags,
+        DateTimeOffset? IsoRecordingTime,byte[] IsoRawRecordingTime,
+        DateTimeOffset? JolietRecordingTime,byte[] JolietRawRecordingTime,
+        int IsoToJolietCandidatesBeforeTimestamp,int? IsoToJolietCandidatesAfterTimestamp,
+        int JolietToIsoCandidatesBeforeTimestamp,int? JolietToIsoCandidatesAfterTimestamp,
         uint IsoDirectoryExtent,int IsoRecordOffset,int IsoRecordIndex,
         uint JolietDirectoryExtent,int JolietRecordOffset,int JolietRecordIndex);
     private sealed record PendingTail(string Path,uint Extent,uint Length,long FinalLba,int Offset,byte[] Bytes,int NonZeroBytes,List<long> Deltas);

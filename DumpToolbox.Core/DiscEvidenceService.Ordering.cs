@@ -6,7 +6,7 @@ namespace DumpToolbox.Core;
 
 public sealed partial class DiscEvidenceService
 {
-    private const int EvidenceDatabaseSchema = 2;
+    private const int EvidenceDatabaseSchema = 3;
 
     private static async Task EnsureOrderingSchemaAsync(SqliteConnection db, CancellationToken cancellationToken)
     {
@@ -56,6 +56,25 @@ CREATE INDEX IF NOT EXISTS ix_filesystem_order ON filesystem_records(image_id,na
 CREATE INDEX IF NOT EXISTS ix_path_table_order ON path_table_records(image_id,namespace,table_kind,record_index);
 CREATE INDEX IF NOT EXISTS ix_namespace_pairs_image ON namespace_record_pairs(image_id,iso_directory_extent,iso_record_index);
 UPDATE meta SET value='2' WHERE key='schema_version';";
+            await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            version = 2;
+        }
+
+        if (version < 3)
+        {
+            using SqliteCommand migrate = db.CreateCommand();
+            migrate.CommandText = @"
+ALTER TABLE filesystem_records ADD COLUMN recording_time TEXT;
+ALTER TABLE filesystem_records ADD COLUMN raw_recording_time BLOB;
+ALTER TABLE namespace_record_pairs ADD COLUMN iso_recording_time TEXT;
+ALTER TABLE namespace_record_pairs ADD COLUMN iso_raw_recording_time BLOB;
+ALTER TABLE namespace_record_pairs ADD COLUMN joliet_recording_time TEXT;
+ALTER TABLE namespace_record_pairs ADD COLUMN joliet_raw_recording_time BLOB;
+ALTER TABLE namespace_record_pairs ADD COLUMN iso_to_joliet_before_timestamp INTEGER;
+ALTER TABLE namespace_record_pairs ADD COLUMN iso_to_joliet_after_timestamp INTEGER;
+ALTER TABLE namespace_record_pairs ADD COLUMN joliet_to_iso_before_timestamp INTEGER;
+ALTER TABLE namespace_record_pairs ADD COLUMN joliet_to_iso_after_timestamp INTEGER;
+UPDATE meta SET value='3' WHERE key='schema_version';";
             await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
     }
@@ -108,9 +127,9 @@ VALUES($image,$sequence,$lba,$type,$namespace,$system,$volume,$publisher,$prepar
             command.Transaction = transaction;
             command.CommandText = @"
 INSERT INTO filesystem_records(image_id,namespace,path,parent_path,identifier,identifier_bytes,extent,length,flags,
- is_directory,directory_extent,record_offset,record_index)
+ is_directory,recording_time,raw_recording_time,directory_extent,record_offset,record_index)
 VALUES($image,$namespace,$path,$parent,$identifier,$identifierBytes,$extent,$length,$flags,$directory,
- $directoryExtent,$recordOffset,$recordIndex);";
+ $recordingTime,$rawRecordingTime,$directoryExtent,$recordOffset,$recordIndex);";
             command.Parameters.AddWithValue("$image", imageId);
             command.Parameters.AddWithValue("$namespace", record.Namespace);
             command.Parameters.AddWithValue("$path", record.Path);
@@ -121,6 +140,10 @@ VALUES($image,$namespace,$path,$parent,$identifier,$identifierBytes,$extent,$len
             command.Parameters.AddWithValue("$length", record.Length);
             command.Parameters.AddWithValue("$flags", record.Flags);
             command.Parameters.AddWithValue("$directory", record.IsDirectory ? 1 : 0);
+            command.Parameters.AddWithValue("$recordingTime", record.RecordingTime is DateTimeOffset recordingTime
+                ? recordingTime.ToString("O", CultureInfo.InvariantCulture)
+                : DBNull.Value);
+            command.Parameters.AddWithValue("$rawRecordingTime", record.RawRecordingTime);
             command.Parameters.AddWithValue("$directoryExtent", record.DirectoryExtent);
             command.Parameters.AddWithValue("$recordOffset", record.RecordOffset);
             command.Parameters.AddWithValue("$recordIndex", record.RecordIndex);
@@ -155,16 +178,32 @@ VALUES($image,$namespace,$kind,$lba,$recordIndex,$recordOffset,$directoryNumber,
             using SqliteCommand command = db.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-INSERT INTO namespace_record_pairs(image_id,iso_path,joliet_path,extent,length,flags,iso_directory_extent,
- iso_record_offset,iso_record_index,joliet_directory_extent,joliet_record_offset,joliet_record_index)
-VALUES($image,$isoPath,$jolietPath,$extent,$length,$flags,$isoDirectoryExtent,$isoRecordOffset,$isoRecordIndex,
- $jolietDirectoryExtent,$jolietRecordOffset,$jolietRecordIndex);";
+INSERT INTO namespace_record_pairs(image_id,iso_path,joliet_path,extent,length,flags,
+ iso_recording_time,iso_raw_recording_time,joliet_recording_time,joliet_raw_recording_time,
+ iso_to_joliet_before_timestamp,iso_to_joliet_after_timestamp,joliet_to_iso_before_timestamp,joliet_to_iso_after_timestamp,
+ iso_directory_extent,iso_record_offset,iso_record_index,joliet_directory_extent,joliet_record_offset,joliet_record_index)
+VALUES($image,$isoPath,$jolietPath,$extent,$length,$flags,
+ $isoRecordingTime,$isoRawRecordingTime,$jolietRecordingTime,$jolietRawRecordingTime,
+ $isoBefore,$isoAfter,$jolietBefore,$jolietAfter,
+ $isoDirectoryExtent,$isoRecordOffset,$isoRecordIndex,$jolietDirectoryExtent,$jolietRecordOffset,$jolietRecordIndex);";
             command.Parameters.AddWithValue("$image", imageId);
             command.Parameters.AddWithValue("$isoPath", pair.IsoPath);
             command.Parameters.AddWithValue("$jolietPath", pair.JolietPath);
             command.Parameters.AddWithValue("$extent", pair.Extent);
             command.Parameters.AddWithValue("$length", pair.Length);
             command.Parameters.AddWithValue("$flags", pair.Flags);
+            command.Parameters.AddWithValue("$isoRecordingTime", pair.IsoRecordingTime is DateTimeOffset isoTime
+                ? isoTime.ToString("O", CultureInfo.InvariantCulture)
+                : DBNull.Value);
+            command.Parameters.AddWithValue("$isoRawRecordingTime", pair.IsoRawRecordingTime);
+            command.Parameters.AddWithValue("$jolietRecordingTime", pair.JolietRecordingTime is DateTimeOffset jolietTime
+                ? jolietTime.ToString("O", CultureInfo.InvariantCulture)
+                : DBNull.Value);
+            command.Parameters.AddWithValue("$jolietRawRecordingTime", pair.JolietRawRecordingTime);
+            command.Parameters.AddWithValue("$isoBefore", pair.IsoToJolietCandidatesBeforeTimestamp);
+            command.Parameters.AddWithValue("$isoAfter", pair.IsoToJolietCandidatesAfterTimestamp is int isoAfter ? isoAfter : DBNull.Value);
+            command.Parameters.AddWithValue("$jolietBefore", pair.JolietToIsoCandidatesBeforeTimestamp);
+            command.Parameters.AddWithValue("$jolietAfter", pair.JolietToIsoCandidatesAfterTimestamp is int jolietAfter ? jolietAfter : DBNull.Value);
             command.Parameters.AddWithValue("$isoDirectoryExtent", pair.IsoDirectoryExtent);
             command.Parameters.AddWithValue("$isoRecordOffset", pair.IsoRecordOffset);
             command.Parameters.AddWithValue("$isoRecordIndex", pair.IsoRecordIndex);
@@ -191,12 +230,12 @@ FROM volume_descriptors v JOIN images i ON i.id=v.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
 ORDER BY s.source_path,i.display_name,v.descriptor_sequence;").ConfigureAwait(false);
         await ExportAsync("joliet_directory_record_order.csv",
-            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,EscapeSequence,ParentPath,DirectoryExtent,RecordIndex,RecordOffset,Path,Identifier,IdentifierBytesHex,Extent,Length,Flags,IsDirectory",
+            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,EscapeSequence,ParentPath,DirectoryExtent,RecordIndex,RecordOffset,Path,Identifier,IdentifierBytesHex,Extent,Length,Flags,IsDirectory,RecordingTimestamp,RawRecordingTimestampHex",
             @"SELECT s.source_path,i.display_name,
 COALESCE(pvd.system_id,''),COALESCE(pvd.application_id,''),COALESCE(pvd.data_preparer_id,''),COALESCE(pvd.publisher_id,''),
 COALESCE(svd.system_id,''),COALESCE(svd.application_id,''),COALESCE(svd.data_preparer_id,''),COALESCE(svd.publisher_id,''),COALESCE(svd.escape_sequence,''),
 f.parent_path,f.directory_extent,f.record_index,f.record_offset,f.path,f.identifier,hex(f.identifier_bytes),
-f.extent,f.length,f.flags,f.is_directory
+ f.extent,f.length,f.flags,f.is_directory,f.recording_time,hex(f.raw_recording_time)
 FROM filesystem_records f JOIN images i ON i.id=f.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
 LEFT JOIN volume_descriptors pvd ON pvd.id=(SELECT id FROM volume_descriptors candidate
@@ -225,14 +264,17 @@ LEFT JOIN volume_descriptors svd ON svd.id=(SELECT id FROM volume_descriptors ca
 WHERE p.namespace='JOLIET'
 ORDER BY s.source_path,i.display_name,p.table_kind,p.record_index;").ConfigureAwait(false);
         await ExportAsync("joliet_iso9660_record_pairs.csv",
-            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,ISOPath,JolietPath,Extent,Length,Flags,ISOToJolietCandidates,JolietToISOCandidates,ISODirectoryExtent,ISORecordIndex,ISORecordOffset,JolietDirectoryExtent,JolietRecordIndex,JolietRecordOffset",
+            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,ISOPath,JolietPath,Extent,Length,Flags,ISOToJolietCandidates,JolietToISOCandidates,ISORecordingTimestamp,ISORawRecordingTimestampHex,JolietRecordingTimestamp,JolietRawRecordingTimestampHex,ISOToJolietCandidatesBeforeTimestamp,ISOToJolietCandidatesAfterTimestamp,JolietToISOCandidatesBeforeTimestamp,JolietToISOCandidatesAfterTimestamp,ISODirectoryExtent,ISORecordIndex,ISORecordOffset,JolietDirectoryExtent,JolietRecordIndex,JolietRecordOffset",
             @"SELECT s.source_path,i.display_name,
 COALESCE(pvd.system_id,''),COALESCE(pvd.application_id,''),COALESCE(pvd.data_preparer_id,''),COALESCE(pvd.publisher_id,''),
 COALESCE(svd.system_id,''),COALESCE(svd.application_id,''),COALESCE(svd.data_preparer_id,''),COALESCE(svd.publisher_id,''),
 p.iso_path,p.joliet_path,p.extent,
 p.length,p.flags,
 COUNT(*) OVER(PARTITION BY p.image_id,p.iso_path,p.extent,p.length,p.flags),
-COUNT(*) OVER(PARTITION BY p.image_id,p.joliet_path,p.extent,p.length,p.flags),
+ COUNT(*) OVER(PARTITION BY p.image_id,p.joliet_path,p.extent,p.length,p.flags),
+ p.iso_recording_time,hex(p.iso_raw_recording_time),p.joliet_recording_time,hex(p.joliet_raw_recording_time),
+ p.iso_to_joliet_before_timestamp,p.iso_to_joliet_after_timestamp,
+ p.joliet_to_iso_before_timestamp,p.joliet_to_iso_after_timestamp,
 p.iso_directory_extent,p.iso_record_index,p.iso_record_offset,p.joliet_directory_extent,
 p.joliet_record_index,p.joliet_record_offset
 FROM namespace_record_pairs p JOIN images i ON i.id=p.image_id

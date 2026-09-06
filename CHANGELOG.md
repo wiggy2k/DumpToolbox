@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.103 — 2026-09-06
+
+### Added
+
+- Disc Evidence exports now retain decoded and raw ISO9660/Joliet recording timestamps and report name-mapping candidate counts both before and after timestamp filtering.
+- The Disc Evidence database migrates existing catalogues for the new timestamp and candidate-count fields and queues stale evidence for refresh.
+
+### Fixed
+
+- DIC Joliet recovery now accepts primary ISO9660 filenames ending in a trailing period when the mapped Joliet filename omits the empty extension, and recognises exact donor matches carrying mapped Joliet provenance as trustworthy naming evidence.
+- DIC donor-image matching no longer rejects an otherwise exact payload solely because the ISO9660 hidden/existence flag differs between masterings; structural file flags remain strict.
+
+### Tests
+
+- Added regression coverage for timestamp parsing and filtering, evidence export fields, trailing-period Joliet aliases, mapped donor provenance, and hidden-flag-compatible payload matching.
+
 ## 0.8.102 — 2026-09-04
 
 ### Fixed

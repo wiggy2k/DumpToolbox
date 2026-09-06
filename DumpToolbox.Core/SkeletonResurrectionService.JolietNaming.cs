@@ -356,10 +356,24 @@ public sealed partial class SkeletonResurrectionService
     internal static bool DonorJolietPathProjectsToIsoPath(string jolietRelativePath, string isoRelativePath, JolietNamingProfile? profile)
         => JolietPathProjectsToIsoPath(jolietRelativePath, isoRelativePath, profile);
 
+    internal static bool EvidenceJolietPathProjectsToIsoPath(
+        string jolietRelativePath,
+        string isoRelativePath,
+        bool terminalIsDirectory,
+        JolietNamingProfile? profile)
+        => JolietPathProjectsToIsoPath(jolietRelativePath, isoRelativePath, profile, !terminalIsDirectory);
+
     private static bool JolietPathProjectsToIsoPath(string jolietRelativePath, string isoRelativePath)
         => JolietPathProjectsToIsoPath(jolietRelativePath, isoRelativePath, null);
 
     private static bool JolietPathProjectsToIsoPath(string jolietRelativePath, string isoRelativePath, JolietNamingProfile? profile)
+        => JolietPathProjectsToIsoPath(jolietRelativePath, isoRelativePath, profile, terminalIsFile: true);
+
+    private static bool JolietPathProjectsToIsoPath(
+        string jolietRelativePath,
+        string isoRelativePath,
+        JolietNamingProfile? profile,
+        bool terminalIsFile)
     {
         string[] joliet = NormalizeDicRelativePath(jolietRelativePath)
             .Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -371,7 +385,7 @@ public sealed partial class SkeletonResurrectionService
 
         for (int i = 0; i < joliet.Length; i++)
         {
-            bool isFile = i == joliet.Length - 1;
+            bool isFile = terminalIsFile && i == joliet.Length - 1;
             if (!JolietComponentProjectsToIsoComponent(joliet[i], iso[i], isFile, profile))
                 return false;
         }
@@ -449,6 +463,8 @@ public sealed partial class SkeletonResurrectionService
     {
         string source = Regex.Replace(jolietComponent.Normalize(NormalizationForm.FormC), @";\d+$", string.Empty);
         string target = Regex.Replace(isoComponent.Normalize(NormalizationForm.FormC), @";\d+$", string.Empty);
+        if (isFile && target.Length > 1 && target[^1] == '.')
+            target = target[..^1];
 
         if (source.Equals(target, StringComparison.OrdinalIgnoreCase))
             return true;

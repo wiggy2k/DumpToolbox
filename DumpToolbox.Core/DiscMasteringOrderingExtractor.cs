@@ -35,9 +35,13 @@ internal sealed record DiscFilesystemRecordEvidence(
     uint Length,
     byte Flags,
     bool IsDirectory,
+    DateTimeOffset? RecordingTime,
+    byte[] RawRecordingTime,
     uint DirectoryExtent,
     int RecordOffset,
     int RecordIndex);
+
+internal readonly record struct DiscEvidenceCandidateCounts(int BeforeTimestamp, int? AfterTimestamp);
 
 internal sealed record DiscPathTableRecordEvidence(
     string Namespace,
@@ -139,9 +143,13 @@ internal static class DiscMasteringOrderingExtractor
                         identifier = identifier[..versionSeparator];
                     string path = parent == "/" ? "/" + identifier : parent + "/" + identifier;
                     bool directory = (flags & 2) != 0;
+                    byte[] rawRecordingTime = data.AsSpan(offset + 18, 7).ToArray();
+                    DateTimeOffset? recordingTime = TryReadIsoRecordingTime(rawRecordingTime, out DateTimeOffset parsedRecordingTime)
+                        ? parsedRecordingTime
+                        : null;
                     result.Add(new DiscFilesystemRecordEvidence(
                         descriptor.Namespace, path, parent, identifier, identifierBytes, childExtent, childLength,
-                        flags, directory, extent, offset, recordIndex));
+                        flags, directory, recordingTime, rawRecordingTime, extent, offset, recordIndex));
                     if (directory && childLength > 0)
                         await Walk(childExtent, childLength, path).ConfigureAwait(false);
                 }
@@ -226,6 +234,37 @@ internal static class DiscMasteringOrderingExtractor
             }
         }
         return result;
+    }
+
+    internal static bool TryReadIsoRecordingTime(ReadOnlySpan<byte> raw, out DateTimeOffset value)
+    {
+        value = default;
+        if (raw.Length < 7)
+            return false;
+
+        try
+        {
+            int year = 1900 + raw[0];
+            int month = raw[1];
+            int day = raw[2];
+            int hour = raw[3];
+            int minute = raw[4];
+            int second = raw[5];
+            sbyte quarterHours = unchecked((sbyte)raw[6]);
+            if (month is < 1 or > 12 || day is < 1 or > 31 || hour > 23 || minute > 59 || second > 59 ||
+                quarterHours is < -48 or > 52)
+            {
+                return false;
+            }
+
+            value = new DateTimeOffset(year, month, day, hour, minute, second,
+                TimeSpan.FromMinutes(quarterHours * 15));
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 
     private static bool PathTableRootMatches(ReadOnlySpan<byte> bytes, uint expectedRootExtent, bool bigEndian)

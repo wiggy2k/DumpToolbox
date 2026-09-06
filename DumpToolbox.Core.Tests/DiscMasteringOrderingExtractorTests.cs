@@ -33,8 +33,10 @@ public sealed class DiscMasteringOrderingExtractorTests
         int offset = 0;
         offset += WriteDirectoryRecord(directory, offset, [0], 30, 2048, 2);
         offset += WriteDirectoryRecord(directory, offset, [1], 30, 2048, 2);
-        offset += WriteDirectoryRecord(directory, offset, Joliet("beta.bin"), 100, 9, 0);
-        WriteDirectoryRecord(directory, offset, Joliet("Alpha.bin"), 101, 10, 0);
+        offset += WriteDirectoryRecord(directory, offset, Joliet("beta.bin"), 100, 9, 0,
+            [126, 9, 6, 14, 35, 27, unchecked((byte)-4)]);
+        WriteDirectoryRecord(directory, offset, Joliet("Alpha.bin"), 101, 10, 0,
+            [126, 9, 6, 14, 35, 28, 0]);
 
         List<DiscFilesystemRecordEvidence> records = await DiscMasteringOrderingExtractor.ReadTreeAsync(
             (_, _, _) => Task.FromResult(directory), joliet, default);
@@ -43,6 +45,8 @@ public sealed class DiscMasteringOrderingExtractorTests
         Assert.Equal([2, 3], records.Select(record => record.RecordIndex));
         Assert.All(records, record => Assert.Equal(30u, record.DirectoryExtent));
         Assert.Equal(Joliet("beta.bin"), records[0].IdentifierBytes);
+        Assert.Equal(new DateTimeOffset(2026, 9, 6, 14, 35, 27, TimeSpan.FromHours(-1)), records[0].RecordingTime);
+        Assert.Equal("7E09060E231BFC", Convert.ToHexString(records[0].RawRecordingTime));
 
         byte[] littlePathTable = PathTable(bigEndian: false);
         byte[] bigPathTable = PathTable(bigEndian: true);
@@ -61,7 +65,25 @@ public sealed class DiscMasteringOrderingExtractorTests
     [Fact]
     public void EvidenceSchemaRequiresExistingUnitsToBeRegathered()
     {
-        Assert.Equal(3, DiscEvidenceService.EvidenceSchema);
+        Assert.Equal(4, DiscEvidenceService.EvidenceSchema);
+    }
+
+    [Fact]
+    public void ProjectionCandidateCountsShowTimestampDisambiguationWithoutUsingExtent()
+    {
+        DateTimeOffset targetTime = new(2026, 9, 6, 14, 35, 27, TimeSpan.Zero);
+        var target = Record("ISO9660", "/LONGFI~1.TXT", 100, targetTime, directoryExtent: 20, recordIndex: 2);
+        DiscFilesystemRecordEvidence[] sources =
+        [
+            Record("JOLIET", "/Long file alpha.txt", 900, targetTime, directoryExtent: 30, recordIndex: 2),
+            Record("JOLIET", "/Long file beta.txt", 901, targetTime.AddSeconds(1), directoryExtent: 30, recordIndex: 3)
+        ];
+
+        DiscEvidenceCandidateCounts counts = DiscEvidenceService.CountCandidatesForEvidence(
+            target, sources, sourceIsJoliet: true, namingProfile: null);
+
+        Assert.Equal(2, counts.BeforeTimestamp);
+        Assert.Equal(1, counts.AfterTimestamp);
     }
 
     [Fact]
@@ -99,7 +121,7 @@ public sealed class DiscMasteringOrderingExtractorTests
                 await connection.OpenAsync();
                 using SqliteCommand command = connection.CreateCommand();
                 command.CommandText = "SELECT value FROM meta WHERE key='schema_version'";
-                Assert.Equal("2", (string)(await command.ExecuteScalarAsync())!);
+                Assert.Equal("3", (string)(await command.ExecuteScalarAsync())!);
                 command.CommandText = @"
 SELECT COUNT(*) FROM sqlite_master
 WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_table_records','namespace_record_pairs');";
@@ -113,6 +135,8 @@ WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_
             Assert.StartsWith("Source,Image,PVDSystemId", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_directory_record_order.csv")), StringComparison.Ordinal);
             Assert.Contains("AliasedPathTable", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_path_table_order.csv")), StringComparison.Ordinal);
             Assert.Contains("ISOToJolietCandidates", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")), StringComparison.Ordinal);
+            Assert.Contains("ISORecordingTimestamp", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")), StringComparison.Ordinal);
+            Assert.Contains("ISOToJolietCandidatesAfterTimestamp", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")), StringComparison.Ordinal);
             Assert.StartsWith("Source,Image,PVDSystemId", await File.ReadAllTextAsync(Path.Combine(exports, "eof_slack_observations.csv")), StringComparison.Ordinal);
         }
         finally
@@ -149,6 +173,26 @@ WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_
         return sector;
     }
 
+    private static DiscFilesystemRecordEvidence Record(
+        string namespaceName,
+        string path,
+        uint extent,
+        DateTimeOffset recordingTime,
+        uint directoryExtent,
+        int recordIndex)
+    {
+        string identifier = path.TrimStart('/');
+        byte[] rawTime =
+        [
+            (byte)(recordingTime.Year - 1900), (byte)recordingTime.Month, (byte)recordingTime.Day,
+            (byte)recordingTime.Hour, (byte)recordingTime.Minute, (byte)recordingTime.Second,
+            unchecked((byte)(sbyte)(recordingTime.Offset.TotalMinutes / 15))
+        ];
+        return new DiscFilesystemRecordEvidence(namespaceName, path, "/", identifier,
+            Encoding.ASCII.GetBytes(identifier), extent, 1234, 0, false, recordingTime, rawTime,
+            directoryExtent, recordIndex * 40, recordIndex);
+    }
+
     private static byte[] PathTable(bool bigEndian)
     {
         var bytes = new byte[44];
@@ -177,12 +221,13 @@ WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_
     }
 
     private static int WriteDirectoryRecord(byte[] target, int offset, byte[] identifier, uint extent,
-        uint length, byte flags)
+        uint length, byte flags, byte[]? recordingTime = null)
     {
         int recordLength = 33 + identifier.Length + (identifier.Length % 2 == 0 ? 1 : 0);
         target[offset] = (byte)recordLength;
         BinaryPrimitives.WriteUInt32LittleEndian(target.AsSpan(offset + 2, 4), extent);
         BinaryPrimitives.WriteUInt32LittleEndian(target.AsSpan(offset + 10, 4), length);
+        (recordingTime ?? [126, 9, 6, 0, 0, 0, 0]).CopyTo(target, offset + 18);
         target[offset + 25] = flags;
         target[offset + 32] = (byte)identifier.Length;
         identifier.CopyTo(target, offset + 33);

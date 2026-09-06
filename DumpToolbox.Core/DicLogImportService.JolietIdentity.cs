@@ -528,6 +528,8 @@ public sealed partial class DicLogImportService
     {
         string source = sourceComponent.Normalize(NormalizationForm.FormC);
         string target = targetComponent.Normalize(NormalizationForm.FormC);
+        if (isFile && target.Length > 1 && target[^1] == '.')
+            target = target[..^1];
 
         if (source.Equals(target, StringComparison.OrdinalIgnoreCase))
             return true;
@@ -829,8 +831,9 @@ public sealed partial class DicLogImportService
     // identity in the correct parent directory. They therefore also prove the recovered
     // source-relative pathname for Joliet synthesis, even when the primary ISO9660 short
     // alias bears no reversible textual relationship to the long filename.
-    private static bool MatchMethodProvesJolietIdentity(string method)
-        => method.Equals("Donor Joliet pathname -> DIC primary ISO9660 record + exact path+size", StringComparison.OrdinalIgnoreCase) ||
+    internal static bool MatchMethodProvesJolietIdentity(string method)
+        => method.EndsWith(" + mapped Joliet pathname", StringComparison.OrdinalIgnoreCase) ||
+           method.Equals("Donor Joliet pathname -> DIC primary ISO9660 record + exact path+size", StringComparison.OrdinalIgnoreCase) ||
            method.Equals("Same-directory exact size + unique DIC recording timestamp", StringComparison.OrdinalIgnoreCase) ||
            method.Equals("Same-directory exact size + DIC-proven ordinal Joliet extent order", StringComparison.OrdinalIgnoreCase) ||
            method.Equals("Same-directory exact size + DIC-proven local extent/name bracket", StringComparison.OrdinalIgnoreCase) ||

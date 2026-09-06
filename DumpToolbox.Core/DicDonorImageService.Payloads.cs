@@ -21,6 +21,16 @@ public sealed partial class DicDonorImageService
             : method + " + mapped Joliet pathname";
     }
 
+    internal static bool PayloadFileFlagsMatch(byte targetFlags, byte donorFlags)
+    {
+        // ISO9660 bit 0 is the Hidden/Existence flag. It controls directory
+        // presentation, not the file's payload bytes, and can legitimately differ
+        // between otherwise usable donor masterings. Keep every structural flag
+        // strict (directory, associated, record format, protection and multi-extent).
+        const byte hiddenExistenceFlag = 0x01;
+        return (targetFlags & ~hiddenExistenceFlag) == (donorFlags & ~hiddenExistenceFlag);
+    }
+
     private static DonorPayloadSelection? FindStrongDonorPayloadMatch(
         SkeletonContentEntry entry,
         IReadOnlyList<SkeletonContentEntry> required,
@@ -33,7 +43,7 @@ public sealed partial class DicDonorImageService
 
         string[] aliases = GetEntryAliases(entry);
         DicDonorFile[] exact = sameSize
-            .Where(candidate => candidate.FileFlags == entry.IsoFileFlags)
+            .Where(candidate => PayloadFileFlagsMatch(entry.IsoFileFlags, candidate.FileFlags))
             .Where(candidate => aliases.Any(alias =>
             {
                 string expectedPath = NormalizePath(entry.IsoOriginalPath ?? alias);
@@ -49,7 +59,7 @@ public sealed partial class DicDonorImageService
             return null;
 
         DicDonorFile[] projected = sameSize
-            .Where(candidate => candidate.FileFlags == entry.IsoFileFlags)
+            .Where(candidate => PayloadFileFlagsMatch(entry.IsoFileFlags, candidate.FileFlags))
             .Where(candidate => jolietByPrimary.TryGetValue(candidate, out DicDonorFile? donorJoliet) &&
                 aliases.Any(alias => SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
                     NormalizePath(donorJoliet.Path),
@@ -72,7 +82,7 @@ public sealed partial class DicDonorImageService
         string donorJolietPath = NormalizePath(projectedJoliet.Path);
         int compatibleTargets = required.Count(other =>
             other.DataLength == entry.DataLength &&
-            other.IsoFileFlags == entry.IsoFileFlags &&
+            PayloadFileFlagsMatch(entry.IsoFileFlags, other.IsoFileFlags) &&
             GetEntryAliases(other).Any(alias =>
                 SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
                     donorJolietPath,
@@ -157,7 +167,7 @@ public sealed partial class DicDonorImageService
         // preserves their definitive directory-record order. Family identity is
         // therefore parent + projected stem + extension + exact size + flags.
         SkeletonContentEntry[] targetFamily = required
-            .Where(target => target.DataLength == entry.DataLength && target.IsoFileFlags == entry.IsoFileFlags)
+            .Where(target => target.DataLength == entry.DataLength && PayloadFileFlagsMatch(entry.IsoFileFlags, target.IsoFileFlags))
             .Select(target => (Target: target, Ok: TryGetTargetTildeFamily(target, out string parent, out string key, out int index, out string ext), Parent: parent, Key: key, Index: index, Ext: ext))
             .Where(x => x.Ok && x.Parent.Equals(targetParent, StringComparison.OrdinalIgnoreCase) && x.Key.Equals(familyKey, StringComparison.OrdinalIgnoreCase) && x.Ext.Equals(extension, StringComparison.OrdinalIgnoreCase))
             .OrderBy(x => x.Index)
@@ -169,7 +179,7 @@ public sealed partial class DicDonorImageService
             return null;
 
         var sourceGroups = donorPrimaryFiles
-            .Where(candidate => candidate.FileFlags == entry.IsoFileFlags && candidate.DataLength == entry.DataLength)
+            .Where(candidate => PayloadFileFlagsMatch(entry.IsoFileFlags, candidate.FileFlags) && candidate.DataLength == entry.DataLength)
             .Where(candidate => jolietByPrimary.TryGetValue(candidate, out DicDonorFile? joliet) && JolietLeafMatchesAliasFamily(joliet.Path, familyKey, extension))
             .GroupBy(candidate =>
             {

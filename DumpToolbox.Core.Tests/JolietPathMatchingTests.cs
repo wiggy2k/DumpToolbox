@@ -6,6 +6,7 @@ public sealed class JolietPathMatchingTests
     [InlineData("Videos/Sam& Shara.bik", "VIDEOS/SAM&SH~1.BIK")]
     [InlineData("Videos/Rock'n Roll.bik", "VIDEOS/ROCK'N~1.BIK")]
     [InlineData("Videos/Cash$ Money.bik", "VIDEOS/CASH$M~1.BIK")]
+    [InlineData("Sound/Trivia4CD", "SOUND/TRIVIA~1.")]
     public void NumericShortAliasesAcceptValidPunctuation(string jolietPath, string primaryPath)
     {
         Assert.True(SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(jolietPath, primaryPath));
