@@ -173,6 +173,8 @@ public partial class MainWindow
             }
             DicDonorImageBox.Text = donor.ImagePath;
 
+            await ConfigureDicDonorJolietPaddingAsync(donor);
+
             DicJolietNameUpdateResult jolietUpdate = await _dicLogImportService.ApplyMatchedJolietNamesAsync(
                 _dicInspection,
                 _dicMatches,

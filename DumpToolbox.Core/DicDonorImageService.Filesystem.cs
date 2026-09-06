@@ -211,6 +211,11 @@ public sealed partial class DicDonorImageService
                     int extendedAttributeRecordLength = bytes[position + 1];
                     int fileUnitSize = bytes[position + 26];
                     int interleaveGapSize = bytes[position + 27];
+                    byte? identifierPaddingValue = TryReadIdentifierPadding(
+                        bytes,
+                        position,
+                        recordLength,
+                        idLength);
 
                     files.Add(new DicDonorFile(
                         childPath,
@@ -224,7 +229,10 @@ public sealed partial class DicDonorImageService
                         Extents: null,
                         DirectoryExtentLba: extentLba,
                         DirectoryRecordOffset: position,
-                        DirectoryRecordIndex: recordIndex));
+                        DirectoryRecordIndex: recordIndex,
+                        DirectoryRecordLength: recordLength,
+                        IdentifierLength: idLength,
+                        IdentifierPaddingValue: identifierPaddingValue));
 
                     if (isDirectory)
                     {
@@ -236,6 +244,24 @@ public sealed partial class DicDonorImageService
             position += recordLength;
             recordIndex++;
         }
+    }
+
+    internal static byte? TryReadIdentifierPadding(
+        byte[] directoryBytes,
+        int recordOffset,
+        int recordLength,
+        int identifierLength)
+    {
+        if ((identifierLength & 1) != 0)
+            return null;
+
+        int paddingOffset = recordOffset + 33 + identifierLength;
+        int recordEnd = recordOffset + recordLength;
+        if (recordOffset < 0 || recordLength < 34 || identifierLength <= 0 ||
+            paddingOffset < 0 || paddingOffset >= recordEnd || paddingOffset >= directoryBytes.Length)
+            return null;
+
+        return directoryBytes[paddingOffset];
     }
 
     private static async Task<byte[]> ReadLogicalBytesAsync(

@@ -39,7 +39,21 @@ internal sealed record DiscFilesystemRecordEvidence(
     byte[] RawRecordingTime,
     uint DirectoryExtent,
     int RecordOffset,
-    int RecordIndex);
+    int RecordIndex,
+    byte? IdentifierPaddingByte,
+    byte[] SystemUse,
+    byte[] RawRecord)
+{
+    public DiscFilesystemRecordEvidence(
+        string namespaceName, string path, string parentPath, string identifier, byte[] identifierBytes,
+        uint extent, uint length, byte flags, bool isDirectory, DateTimeOffset? recordingTime,
+        byte[] rawRecordingTime, uint directoryExtent, int recordOffset, int recordIndex)
+        : this(namespaceName, path, parentPath, identifier, identifierBytes, extent, length, flags,
+            isDirectory, recordingTime, rawRecordingTime, directoryExtent, recordOffset, recordIndex,
+            null, [], [])
+    {
+    }
+}
 
 internal readonly record struct DiscEvidenceCandidateCounts(int BeforeTimestamp, int? AfterTimestamp);
 
@@ -144,12 +158,21 @@ internal static class DiscMasteringOrderingExtractor
                     string path = parent == "/" ? "/" + identifier : parent + "/" + identifier;
                     bool directory = (flags & 2) != 0;
                     byte[] rawRecordingTime = data.AsSpan(offset + 18, 7).ToArray();
+                    byte? identifierPaddingByte = (identifierLength & 1) == 0 && 33 + identifierLength < recordLength
+                        ? data[offset + 33 + identifierLength]
+                        : null;
+                    int systemUseOffset = 33 + identifierLength + ((identifierLength & 1) == 0 ? 1 : 0);
+                    byte[] systemUse = systemUseOffset < recordLength
+                        ? data.AsSpan(offset + systemUseOffset, recordLength - systemUseOffset).ToArray()
+                        : [];
+                    byte[] rawRecord = data.AsSpan(offset, recordLength).ToArray();
                     DateTimeOffset? recordingTime = TryReadIsoRecordingTime(rawRecordingTime, out DateTimeOffset parsedRecordingTime)
                         ? parsedRecordingTime
                         : null;
                     result.Add(new DiscFilesystemRecordEvidence(
                         descriptor.Namespace, path, parent, identifier, identifierBytes, childExtent, childLength,
-                        flags, directory, recordingTime, rawRecordingTime, extent, offset, recordIndex));
+                        flags, directory, recordingTime, rawRecordingTime, extent, offset, recordIndex,
+                        identifierPaddingByte, systemUse, rawRecord));
                     if (directory && childLength > 0)
                         await Walk(childExtent, childLength, path).ConfigureAwait(false);
                 }

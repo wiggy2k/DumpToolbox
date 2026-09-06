@@ -58,6 +58,28 @@ public sealed partial class SkeletonResurrectionService
             dicLoggedMode2Form1EccError: dicLoggedMode2Form1EccError);
     }
 
+    /// <summary>
+    /// Rebuilds protection fields after a Mode 1 or Mode 2 Form 1 filesystem
+    /// metadata byte has been changed while preserving the existing raw framing.
+    /// </summary>
+    internal static void RebuildForm1ProtectionFields(
+        Span<byte> sector,
+        bool dicLoggedMode2Form1EccError = false)
+    {
+        if (sector.Length < RawSectorSize)
+            throw new ArgumentException("Sector buffer must be at least 2352 bytes.", nameof(sector));
+
+        RawSectorPayloadKind kind = GetRawPayloadKind(sector);
+        if (kind is not (RawSectorPayloadKind.Mode1 or RawSectorPayloadKind.Mode2Form1))
+            throw new InvalidOperationException("The raw sector is not Mode 1 or Mode 2 Form 1.");
+
+        RebuildErrorFields(
+            sector.Slice(0, RawSectorSize),
+            kind,
+            mode2Form2NoEdc: false,
+            dicLoggedMode2Form1EccError: dicLoggedMode2Form1EccError);
+    }
+
     private static void RebuildErrorFields(
         Span<byte> sector,
         RawSectorPayloadKind kind,

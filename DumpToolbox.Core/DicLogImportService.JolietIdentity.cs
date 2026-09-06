@@ -939,7 +939,7 @@ public sealed partial class DicLogImportService
             return null;
 
         string preparer = ReadIsoAsciiField(pvd, 446, 128);
-        if (!preparer.StartsWith("CeQuadrat ", StringComparison.OrdinalIgnoreCase))
+        if (!IsCeQuadratPreparer(preparer))
             return null;
 
         uint pathTableSize = BinaryPrimitives.ReadUInt32LittleEndian(pvd.AsSpan(132, 4));
@@ -947,29 +947,40 @@ public sealed partial class DicLogImportService
         if (pathTableSize == 0 || primaryTypeLPathTableLba == 0 || pathTableSize > 1024 * 1024)
             return null;
 
-        long linkTableLba = checked((long)primaryTypeLPathTableLba - 1);
-        // The known WinOnCD layout places the private table directly after the
-        // descriptor terminator and directly before the primary Type-L path table.
-        // Requiring both relationships prevents an unused-sector guess.
-        if (linkTableLba != terminatorLba + 1)
+        // The private bridge occupies the complete reserved range between the
+        // descriptor terminator and primary Type-L path table. Most examples use
+        // one sector, but large directory trees prove that it can span two or more.
+        long linkTableLba = terminatorLba + 1;
+        long linkTableEndLba = primaryTypeLPathTableLba;
+        long reservedSectorCount64 = linkTableEndLba - linkTableLba;
+        if (reservedSectorCount64 <= 0 || reservedSectorCount64 > 64)
             return null;
+        int reservedSectorCount = checked((int)reservedSectorCount64);
 
         long relativeLinkTableLba = checked(linkTableLba - inspection.BaseLba);
         if (relativeLinkTableLba < 0 || relativeLinkTableLba >= inspection.SectorCount)
             return null;
 
-        // The ordinary synthetic skeleton has an all-zero Mode 1 payload here on
+        // The ordinary synthetic skeleton has all-zero Mode 1 payloads here on
         // the first Joliet preparation pass.  A later pass may encounter the exact
         // CeQuadrat bridge that *we just synthesized*.  Parse and retain that table
         // instead of disabling the CeQuadrat allocator on the rebuild pass.  An
         // original/donor-supplied bridge is even stronger evidence and is handled the
         // same way.
-        stream.Position = relativeLinkTableLba * RawSectorSize;
-        ReadExactly(stream, sector, cancellationToken);
-        if (sector[15] != 1)
-            return null;
+        byte[] existingLinkBytes = new byte[checked(reservedSectorCount * CookedSectorSize)];
+        for (int sectorIndex = 0; sectorIndex < reservedSectorCount; sectorIndex++)
+        {
+            long relativeLba = relativeLinkTableLba + sectorIndex;
+            if (relativeLba < 0 || relativeLba >= inspection.SectorCount)
+                return null;
+            stream.Position = relativeLba * RawSectorSize;
+            ReadExactly(stream, sector, cancellationToken);
+            if (sector[15] != 1)
+                return null;
+            sector.AsSpan(16, CookedSectorSize).CopyTo(existingLinkBytes.AsSpan(sectorIndex * CookedSectorSize));
+        }
 
-        ReadOnlySpan<byte> existingLinkPayload = sector.AsSpan(16, CookedSectorSize);
+        ReadOnlySpan<byte> existingLinkPayload = existingLinkBytes;
         bool linkPayloadIsZero = true;
         for (int i = 0; i < existingLinkPayload.Length; i++)
         {
@@ -1059,8 +1070,12 @@ public sealed partial class DicLogImportService
             !existingJolietByPrimary.Keys.ToHashSet().SetEquals(extents))
             return null;
 
-        return new CeQuadratLinkTableContext(linkTableLba, extents, existingJolietByPrimary);
+        return new CeQuadratLinkTableContext(linkTableLba, reservedSectorCount, extents, existingJolietByPrimary);
     }
+
+    private static bool IsCeQuadratPreparer(string value)
+        => value.Contains("CEQUADRAT", StringComparison.OrdinalIgnoreCase) ||
+           value.Contains("CEQUDRAT", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyDictionary<string, PrimaryDirectoryMetadata> ReadPrimaryDirectoryMetadata(
         SkeletonInspectionResult inspection,

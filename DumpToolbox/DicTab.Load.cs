@@ -183,6 +183,24 @@ public partial class MainWindow
                             progress: null,
                             cancellationToken: _dicCts.Token);
                         MergeDicMatches(savedDonor.Matches);
+                        bool samePaddingDonor = string.Equals(
+                            state.DonorJolietPaddingSourcePath,
+                            savedDonor.ImagePath,
+                            StringComparison.OrdinalIgnoreCase) &&
+                            state.DonorJolietPaddingRecords.SequenceEqual(savedDonor.NonZeroJolietPaddingRecords);
+                        if (!samePaddingDonor)
+                        {
+                            state.TestDonorJolietPadding = false;
+                            state.DonorJolietPaddingApplied = false;
+                        }
+                        state.DonorJolietPaddingSourcePath = savedDonor.ImagePath;
+                        state.DonorJolietPaddingRecords = savedDonor.NonZeroJolietPaddingRecords.ToList();
+                        if (savedDonor.NonZeroJolietPaddingRecords.Count > 0)
+                        {
+                            AppendDicLog(
+                                $"JOLIET: restored {savedDonor.NonZeroJolietPaddingRecords.Count:N0} non-zero donor padding observation(s) " +
+                                "for optional candidate verification after a complete rebuild.");
+                        }
                         if (donorRequirementsRequired)
                         {
                             _dicDonorRequirementsSatisfied = savedDonor.DonorRequirementsSatisfied;

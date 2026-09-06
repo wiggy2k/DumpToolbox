@@ -17,6 +17,7 @@ public partial class MainWindow
             return;
 
         SkeletonInspectionResult inspection = _dicInspection;
+        bool rebuildCompleted = false;
         try
         {
             int donorRequirementCount = inspection.DonorRequirements?.Count(requirement => requirement.BlocksResurrection) ?? 0;
@@ -85,6 +86,7 @@ public partial class MainWindow
                 activity,
                 _dicCts.Token,
                 ResolveEofSlackAmbiguityAsync);
+            rebuildCompleted = true;
 
             foreach (string path in newlyApplied)
                 _dicAppliedEntries.Add(path);
@@ -114,6 +116,7 @@ public partial class MainWindow
             AppendDicLog($"Complete in {stopwatch.Elapsed}. This pass restored/satisfied {result.RestoredEntries:N0} entries; {result.MissingEntries:N0} remain missing.");
             AppendDicLog($"Cumulative working BIN: {result.OutputPath} ({result.OutputBytes:N0} bytes). {_dicAppliedEntries.Count:N0} file payload(s) are now permanently carried forward by that image.");
 
+            bool? rebuiltHashesMatch = null;
             if (!string.IsNullOrWhiteSpace(inspection.ExpectedImageCrc32) ||
                 !string.IsNullOrWhiteSpace(inspection.ExpectedImageMd5) ||
                 !string.IsNullOrWhiteSpace(inspection.ExpectedImageSha1))
@@ -130,25 +133,8 @@ public partial class MainWindow
                     verifyOptions,
                     cancellationToken: _dicCts.Token);
 
-                bool allHashesMatch = true;
-                if (!string.IsNullOrWhiteSpace(inspection.ExpectedImageCrc32) && imageHashes.Hashes.TryGetValue("CRC32", out string? actualCrc32))
-                {
-                    bool match = actualCrc32.Equals(inspection.ExpectedImageCrc32, StringComparison.OrdinalIgnoreCase);
-                    allHashesMatch &= match;
-                    AppendDicLog($"DIC VERIFY: CRC32 {(match ? "MATCH" : "DIFFERS")} — expected {inspection.ExpectedImageCrc32}, actual {actualCrc32}.");
-                }
-                if (!string.IsNullOrWhiteSpace(inspection.ExpectedImageMd5) && imageHashes.Hashes.TryGetValue("MD5", out string? actualMd5))
-                {
-                    bool match = actualMd5.Equals(inspection.ExpectedImageMd5, StringComparison.OrdinalIgnoreCase);
-                    allHashesMatch &= match;
-                    AppendDicLog($"DIC VERIFY: MD5 {(match ? "MATCH" : "DIFFERS")} — expected {inspection.ExpectedImageMd5}, actual {actualMd5}.");
-                }
-                if (!string.IsNullOrWhiteSpace(inspection.ExpectedImageSha1) && imageHashes.Hashes.TryGetValue("SHA-1", out string? actualSha1))
-                {
-                    bool match = actualSha1.Equals(inspection.ExpectedImageSha1, StringComparison.OrdinalIgnoreCase);
-                    allHashesMatch &= match;
-                    AppendDicLog($"DIC VERIFY: SHA1 {(match ? "MATCH" : "DIFFERS")} — expected {inspection.ExpectedImageSha1}, actual {actualSha1}.");
-                }
+                bool allHashesMatch = LogDicExpectedHashComparison("DIC VERIFY", inspection, imageHashes);
+                rebuiltHashesMatch = allHashesMatch;
 
                 if (allHashesMatch)
                 {
@@ -165,12 +151,20 @@ public partial class MainWindow
                 }
             }
 
+            await TryTestDicDonorJolietPaddingAsync(
+                inspection,
+                result,
+                rebuiltHashesMatch,
+                _dicCts.Token);
+
             DicOutputBox.Text = _skeletonService.SuggestOutputPath(_dicInspection);
             SetWindowStatus();
         }
         catch (OperationCanceledException)
         {
-            AppendDicLog("DIC rebuild cancelled. Partial output removed; saved recovery state was not advanced.");
+            AppendDicLog(rebuildCompleted
+                ? "JOLIET CANDIDATE: verification cancelled. The temporary candidate was removed and the completed rebuilt BIN was left unchanged."
+                : "DIC rebuild cancelled. Partial output removed; saved recovery state was not advanced.");
             DicProgressText.Text = "Cancelled";
             SetWindowStatus();
         }
@@ -207,6 +201,10 @@ public partial class MainWindow
                 _dicState.LastOutputPath = null;
                 _dicState.LastDonorImagePath = null;
                 _dicState.DonorRequirementsSatisfied = false;
+                _dicState.TestDonorJolietPadding = false;
+                _dicState.DonorJolietPaddingApplied = false;
+                _dicState.DonorJolietPaddingSourcePath = null;
+                _dicState.DonorJolietPaddingRecords.Clear();
             }
             _dicDonorRequirementsSatisfied = false;
             DicDonorImageBox.Text = string.Empty;

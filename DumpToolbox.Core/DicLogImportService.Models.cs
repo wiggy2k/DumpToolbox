@@ -84,6 +84,7 @@ public sealed partial class DicLogImportService
 
     private sealed record CeQuadratLinkTableContext(
         long LinkTableLba,
+        int ReservedSectorCount,
         IReadOnlyList<uint> PrimaryDirectoryExtents,
         IReadOnlyDictionary<uint, uint>? ExistingJolietByPrimary = null);
 

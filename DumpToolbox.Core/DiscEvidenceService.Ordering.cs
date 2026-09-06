@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
 
@@ -6,7 +7,7 @@ namespace DumpToolbox.Core;
 
 public sealed partial class DiscEvidenceService
 {
-    private const int EvidenceDatabaseSchema = 3;
+    private const int EvidenceDatabaseSchema = 4;
 
     private static async Task EnsureOrderingSchemaAsync(SqliteConnection db, CancellationToken cancellationToken)
     {
@@ -76,6 +77,27 @@ ALTER TABLE namespace_record_pairs ADD COLUMN joliet_to_iso_before_timestamp INT
 ALTER TABLE namespace_record_pairs ADD COLUMN joliet_to_iso_after_timestamp INTEGER;
 UPDATE meta SET value='3' WHERE key='schema_version';";
             await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            version = 3;
+        }
+
+        if (version < 4)
+        {
+            using SqliteCommand migrate = db.CreateCommand();
+            migrate.CommandText = @"
+ALTER TABLE filesystem_records ADD COLUMN identifier_padding INTEGER;
+ALTER TABLE filesystem_records ADD COLUMN system_use BLOB;
+ALTER TABLE filesystem_records ADD COLUMN raw_record_sha1 TEXT;
+ALTER TABLE filesystem_records ADD COLUMN outside_volume INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE filesystem_records ADD COLUMN overlaps_metadata INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE filesystem_records ADD COLUMN overlaps_file INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS mastering_observations(
+ id INTEGER PRIMARY KEY,image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL,region TEXT NOT NULL,start_lba INTEGER NOT NULL,end_lba INTEGER NOT NULL,
+ sector_count INTEGER NOT NULL,nonzero_sector_count INTEGER NOT NULL,nonzero_bytes INTEGER NOT NULL,
+ first_nonzero_offset INTEGER,payload_sha1 TEXT NOT NULL,duplicate_lba INTEGER,details TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_mastering_observations_image ON mastering_observations(image_id,region,start_lba);
+UPDATE meta SET value='4' WHERE key='schema_version';";
+            await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -86,6 +108,8 @@ UPDATE meta SET value='3' WHERE key='schema_version';";
         ImageEvidence evidence,
         CancellationToken cancellationToken)
     {
+        Dictionary<(string Namespace, uint DirectoryExtent, int RecordOffset, int RecordIndex), DiscRecordGeometryFlags> geometry =
+            AnalyseRecordGeometry(evidence);
         foreach (DiscVolumeDescriptorEvidence descriptor in evidence.Descriptors)
         {
             using SqliteCommand command = db.CreateCommand();
@@ -127,9 +151,11 @@ VALUES($image,$sequence,$lba,$type,$namespace,$system,$volume,$publisher,$prepar
             command.Transaction = transaction;
             command.CommandText = @"
 INSERT INTO filesystem_records(image_id,namespace,path,parent_path,identifier,identifier_bytes,extent,length,flags,
- is_directory,recording_time,raw_recording_time,directory_extent,record_offset,record_index)
+ is_directory,recording_time,raw_recording_time,directory_extent,record_offset,record_index,
+ identifier_padding,system_use,raw_record_sha1,outside_volume,overlaps_metadata,overlaps_file)
 VALUES($image,$namespace,$path,$parent,$identifier,$identifierBytes,$extent,$length,$flags,$directory,
- $recordingTime,$rawRecordingTime,$directoryExtent,$recordOffset,$recordIndex);";
+ $recordingTime,$rawRecordingTime,$directoryExtent,$recordOffset,$recordIndex,
+ $identifierPadding,$systemUse,$rawRecordSha1,$outsideVolume,$overlapsMetadata,$overlapsFile);";
             command.Parameters.AddWithValue("$image", imageId);
             command.Parameters.AddWithValue("$namespace", record.Namespace);
             command.Parameters.AddWithValue("$path", record.Path);
@@ -147,6 +173,13 @@ VALUES($image,$namespace,$path,$parent,$identifier,$identifierBytes,$extent,$len
             command.Parameters.AddWithValue("$directoryExtent", record.DirectoryExtent);
             command.Parameters.AddWithValue("$recordOffset", record.RecordOffset);
             command.Parameters.AddWithValue("$recordIndex", record.RecordIndex);
+            command.Parameters.AddWithValue("$identifierPadding", record.IdentifierPaddingByte is byte padding ? padding : DBNull.Value);
+            command.Parameters.AddWithValue("$systemUse", record.SystemUse);
+            command.Parameters.AddWithValue("$rawRecordSha1", Convert.ToHexString(SHA1.HashData(record.RawRecord)));
+            DiscRecordGeometryFlags flags = geometry[GeometryRecordKey(record)];
+            command.Parameters.AddWithValue("$outsideVolume", flags.OutsideVolume ? 1 : 0);
+            command.Parameters.AddWithValue("$overlapsMetadata", flags.OverlapsMetadata ? 1 : 0);
+            command.Parameters.AddWithValue("$overlapsFile", flags.OverlapsFile ? 1 : 0);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -212,6 +245,29 @@ VALUES($image,$isoPath,$jolietPath,$extent,$length,$flags,
             command.Parameters.AddWithValue("$jolietRecordIndex", pair.JolietRecordIndex);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
+
+        foreach (DiscMasteringObservation observation in evidence.MasteringObservations)
+        {
+            using SqliteCommand command = db.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"
+INSERT INTO mastering_observations(image_id,kind,region,start_lba,end_lba,sector_count,
+ nonzero_sector_count,nonzero_bytes,first_nonzero_offset,payload_sha1,duplicate_lba,details)
+VALUES($image,$kind,$region,$start,$end,$sectors,$nonzeroSectors,$nonzeroBytes,$first,$sha1,$duplicate,$details);";
+            command.Parameters.AddWithValue("$image", imageId);
+            command.Parameters.AddWithValue("$kind", observation.Kind);
+            command.Parameters.AddWithValue("$region", observation.Region);
+            command.Parameters.AddWithValue("$start", observation.StartLba);
+            command.Parameters.AddWithValue("$end", observation.EndLba);
+            command.Parameters.AddWithValue("$sectors", observation.SectorCount);
+            command.Parameters.AddWithValue("$nonzeroSectors", observation.NonZeroSectorCount);
+            command.Parameters.AddWithValue("$nonzeroBytes", observation.NonZeroBytes);
+            command.Parameters.AddWithValue("$first", observation.FirstNonZeroOffset is int first ? first : DBNull.Value);
+            command.Parameters.AddWithValue("$sha1", observation.PayloadSha1);
+            command.Parameters.AddWithValue("$duplicate", observation.DuplicateLba is long duplicate ? duplicate : DBNull.Value);
+            command.Parameters.AddWithValue("$details", observation.Details);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static async Task<IReadOnlyList<string>> ExportOrderingEvidenceAsync(
@@ -230,12 +286,13 @@ FROM volume_descriptors v JOIN images i ON i.id=v.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
 ORDER BY s.source_path,i.display_name,v.descriptor_sequence;").ConfigureAwait(false);
         await ExportAsync("joliet_directory_record_order.csv",
-            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,EscapeSequence,ParentPath,DirectoryExtent,RecordIndex,RecordOffset,Path,Identifier,IdentifierBytesHex,Extent,Length,Flags,IsDirectory,RecordingTimestamp,RawRecordingTimestampHex",
+            "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,EscapeSequence,ParentPath,DirectoryExtent,RecordIndex,RecordOffset,Path,Identifier,IdentifierBytesHex,IdentifierPadding,SystemUseHex,RawRecordSHA1,Extent,Length,Flags,IsDirectory,RecordingTimestamp,RawRecordingTimestampHex,OutsideVolume,OverlapsMetadata,OverlapsFile",
             @"SELECT s.source_path,i.display_name,
 COALESCE(pvd.system_id,''),COALESCE(pvd.application_id,''),COALESCE(pvd.data_preparer_id,''),COALESCE(pvd.publisher_id,''),
 COALESCE(svd.system_id,''),COALESCE(svd.application_id,''),COALESCE(svd.data_preparer_id,''),COALESCE(svd.publisher_id,''),COALESCE(svd.escape_sequence,''),
 f.parent_path,f.directory_extent,f.record_index,f.record_offset,f.path,f.identifier,hex(f.identifier_bytes),
- f.extent,f.length,f.flags,f.is_directory,f.recording_time,hex(f.raw_recording_time)
+ f.identifier_padding,hex(f.system_use),f.raw_record_sha1,f.extent,f.length,f.flags,f.is_directory,
+ f.recording_time,hex(f.raw_recording_time),f.outside_volume,f.overlaps_metadata,f.overlaps_file
 FROM filesystem_records f JOIN images i ON i.id=f.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
 LEFT JOIN volume_descriptors pvd ON pvd.id=(SELECT id FROM volume_descriptors candidate
@@ -244,6 +301,22 @@ LEFT JOIN volume_descriptors svd ON svd.id=(SELECT id FROM volume_descriptors ca
  WHERE candidate.image_id=i.id AND candidate.namespace='JOLIET' ORDER BY candidate.descriptor_sequence LIMIT 1)
 WHERE f.namespace='JOLIET'
 ORDER BY s.source_path,i.display_name,f.directory_extent,f.record_index;").ConfigureAwait(false);
+        await ExportAsync("filesystem_record_observations.csv",
+            "Source,Image,Media,Namespace,ParentPath,DirectoryExtent,RecordIndex,RecordOffset,Path,Identifier,IdentifierBytesHex,IdentifierPadding,SystemUseHex,RawRecordSHA1,Extent,Length,Flags,IsDirectory,RecordingTimestamp,RawRecordingTimestampHex,OutsideVolume,OverlapsMetadata,OverlapsFile",
+            @"SELECT s.source_path,i.display_name,i.media_type,f.namespace,f.parent_path,f.directory_extent,
+f.record_index,f.record_offset,f.path,f.identifier,hex(f.identifier_bytes),f.identifier_padding,
+hex(f.system_use),f.raw_record_sha1,f.extent,f.length,f.flags,f.is_directory,f.recording_time,
+hex(f.raw_recording_time),f.outside_volume,f.overlaps_metadata,f.overlaps_file
+FROM filesystem_records f JOIN images i ON i.id=f.image_id
+LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
+ORDER BY s.source_path,i.display_name,f.namespace,f.directory_extent,f.record_index;").ConfigureAwait(false);
+        await ExportAsync("mastering_region_observations.csv",
+            "Source,Image,Media,Kind,Region,StartLBA,EndLBAExclusive,SectorCount,NonZeroSectorCount,NonZeroBytes,FirstNonZeroOffset,PayloadSHA1,DuplicateLBA,Details",
+            @"SELECT s.source_path,i.display_name,i.media_type,m.kind,m.region,m.start_lba,m.end_lba,
+m.sector_count,m.nonzero_sector_count,m.nonzero_bytes,m.first_nonzero_offset,m.payload_sha1,m.duplicate_lba,m.details
+FROM mastering_observations m JOIN images i ON i.id=m.image_id
+LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
+ORDER BY s.source_path,i.display_name,m.region,m.start_lba,m.kind;").ConfigureAwait(false);
         await ExportAsync("joliet_path_table_order.csv",
             "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,EscapeSequence,AliasedPathTable,TableKind,TableLBA,RecordIndex,RecordOffset,DirectoryNumber,ParentDirectoryNumber,Extent,Identifier,IdentifierBytesHex",
             @"SELECT s.source_path,i.display_name,

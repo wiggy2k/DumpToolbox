@@ -28,7 +28,10 @@ public sealed record DicDonorFile(
     IReadOnlyList<DicDonorExtent>? Extents = null,
     uint DirectoryExtentLba = 0,
     int DirectoryRecordOffset = -1,
-    int DirectoryRecordIndex = -1)
+    int DirectoryRecordIndex = -1,
+    int DirectoryRecordLength = 0,
+    int IdentifierLength = 0,
+    byte? IdentifierPaddingValue = null)
 {
     public bool IsAssociated => (FileFlags & 0x04) != 0;
     public bool IsDirectory => (FileFlags & 0x02) != 0;
@@ -38,6 +41,25 @@ public sealed record DicDonorFile(
     // the ordinary file data from a donor image.
     public bool RequiresExactDonorSemantics => IsAssociated && DataLength > 0;
 }
+
+public sealed record DicJolietPaddingEvidence(
+    string Path,
+    uint ExtentLba,
+    long DataLength,
+    byte FileFlags,
+    uint DirectoryExtentLba,
+    int DirectoryRecordOffset,
+    int DirectoryRecordLength,
+    int IdentifierLength,
+    byte PaddingValue);
+
+public sealed record DicJolietPaddingCandidateResult(
+    string CandidatePath,
+    int AppliedRecords,
+    int AlreadyMatchingRecords,
+    int SkippedRecords,
+    IReadOnlyList<DicJolietPaddingEvidence> AppliedEvidence,
+    IReadOnlyList<string> Warnings);
 
 public sealed record DicDonorScanResult(
     string ImagePath,
@@ -53,6 +75,7 @@ public sealed record DicDonorScanResult(
     bool DonorRequirementsSatisfied,
     IReadOnlyList<DicDonorFile> Files,
     IReadOnlyDictionary<string, SkeletonSourceMatch> Matches,
+    IReadOnlyList<DicJolietPaddingEvidence> NonZeroJolietPaddingRecords,
     IReadOnlyList<string> Warnings);
 
 /// <summary>
@@ -546,7 +569,26 @@ public sealed partial class DicDonorImageService
             donorRequirementsSatisfied,
             filesystem.Files,
             matches,
+            BuildNonZeroJolietPaddingEvidence(filesystem.JolietFiles),
             warnings);
+    }
+
+    private static IReadOnlyList<DicJolietPaddingEvidence> BuildNonZeroJolietPaddingEvidence(
+        IReadOnlyList<DicDonorFile> jolietFiles)
+    {
+        return jolietFiles
+            .Where(file => file.IdentifierPaddingValue is > 0)
+            .Select(file => new DicJolietPaddingEvidence(
+                file.Path,
+                file.ExtentLba,
+                file.DataLength,
+                file.FileFlags,
+                file.DirectoryExtentLba,
+                file.DirectoryRecordOffset,
+                file.DirectoryRecordLength,
+                file.IdentifierLength,
+                file.IdentifierPaddingValue!.Value))
+            .ToArray();
     }
 
 }

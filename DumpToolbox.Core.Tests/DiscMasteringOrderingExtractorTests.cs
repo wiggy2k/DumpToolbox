@@ -45,6 +45,9 @@ public sealed class DiscMasteringOrderingExtractorTests
         Assert.Equal([2, 3], records.Select(record => record.RecordIndex));
         Assert.All(records, record => Assert.Equal(30u, record.DirectoryExtent));
         Assert.Equal(Joliet("beta.bin"), records[0].IdentifierBytes);
+        Assert.Equal((byte)0, records[0].IdentifierPaddingByte);
+        Assert.Empty(records[0].SystemUse);
+        Assert.NotEmpty(records[0].RawRecord);
         Assert.Equal(new DateTimeOffset(2026, 9, 6, 14, 35, 27, TimeSpan.FromHours(-1)), records[0].RecordingTime);
         Assert.Equal("7E09060E231BFC", Convert.ToHexString(records[0].RawRecordingTime));
 
@@ -65,7 +68,7 @@ public sealed class DiscMasteringOrderingExtractorTests
     [Fact]
     public void EvidenceSchemaRequiresExistingUnitsToBeRegathered()
     {
-        Assert.Equal(4, DiscEvidenceService.EvidenceSchema);
+        Assert.Equal(5, DiscEvidenceService.EvidenceSchema);
     }
 
     [Fact]
@@ -121,22 +124,26 @@ public sealed class DiscMasteringOrderingExtractorTests
                 await connection.OpenAsync();
                 using SqliteCommand command = connection.CreateCommand();
                 command.CommandText = "SELECT value FROM meta WHERE key='schema_version'";
-                Assert.Equal("3", (string)(await command.ExecuteScalarAsync())!);
+                Assert.Equal("4", (string)(await command.ExecuteScalarAsync())!);
                 command.CommandText = @"
 SELECT COUNT(*) FROM sqlite_master
-WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_table_records','namespace_record_pairs');";
-                Assert.Equal(4L, (long)(await command.ExecuteScalarAsync())!);
+WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_table_records','namespace_record_pairs','mastering_observations');";
+                Assert.Equal(5L, (long)(await command.ExecuteScalarAsync())!);
             }
 
             Assert.True(File.Exists(Path.Combine(exports, "volume_descriptor_observations.csv")));
             Assert.True(File.Exists(Path.Combine(exports, "joliet_directory_record_order.csv")));
             Assert.True(File.Exists(Path.Combine(exports, "joliet_path_table_order.csv")));
             Assert.True(File.Exists(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")));
+            Assert.True(File.Exists(Path.Combine(exports, "filesystem_record_observations.csv")));
+            Assert.True(File.Exists(Path.Combine(exports, "mastering_region_observations.csv")));
             Assert.StartsWith("Source,Image,PVDSystemId", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_directory_record_order.csv")), StringComparison.Ordinal);
             Assert.Contains("AliasedPathTable", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_path_table_order.csv")), StringComparison.Ordinal);
             Assert.Contains("ISOToJolietCandidates", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")), StringComparison.Ordinal);
             Assert.Contains("ISORecordingTimestamp", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")), StringComparison.Ordinal);
             Assert.Contains("ISOToJolietCandidatesAfterTimestamp", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")), StringComparison.Ordinal);
+            Assert.Contains("IdentifierPadding", await File.ReadAllTextAsync(Path.Combine(exports, "filesystem_record_observations.csv")), StringComparison.Ordinal);
+            Assert.Contains("DuplicateLBA", await File.ReadAllTextAsync(Path.Combine(exports, "mastering_region_observations.csv")), StringComparison.Ordinal);
             Assert.StartsWith("Source,Image,PVDSystemId", await File.ReadAllTextAsync(Path.Combine(exports, "eof_slack_observations.csv")), StringComparison.Ordinal);
         }
         finally

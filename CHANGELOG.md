@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.104 — 2026-09-06
+
+### Added
+
+- Disc Evidence now records ISO9660 and Joliet identifier-padding bytes, System Use data, raw directory-record fingerprints, out-of-volume records, metadata/file overlaps, and non-zero system-area, unclaimed, descriptor and post-volume regions.
+- Analysis exports now include complete filesystem-record observations and classified mastering-region observations, including duplicate locations for matching post-volume sectors.
+- DIC can retain non-zero Joliet identifier-padding evidence from a donor, build a temporary candidate after a complete recovery, and promote it only when the original whole-image hashes verify it.
+
+### Fixed
+
+- CeQuadrat/WinOnCD Joliet directory bridges can now span the full reserved range before the primary Type-L path table instead of being limited to one sector.
+- CeQuadrat footer metadata is no longer guessed from the formatter signature alone; exact logged or same-disc donor evidence is preserved, while unsupported footer layouts remain unsynthesized.
+- Disc detection accepts both the standard `CeQuadrat` spelling and the observed legacy `CeQudrat` spelling.
+
+### Tests
+
+- Added regression coverage for non-zero Joliet padding, protected-sector regeneration, safe candidate patching, and a 402-directory CeQuadrat bridge spanning two sectors.
+
 ## 0.8.103 — 2026-09-06
 
 ### Added

@@ -12,6 +12,10 @@ public sealed class DicRecoveryState
     public string? LastDonorImagePath { get; set; }
     public string? LastOutputPath { get; set; }
     public bool DonorRequirementsSatisfied { get; set; }
+    public bool TestDonorJolietPadding { get; set; }
+    public bool DonorJolietPaddingApplied { get; set; }
+    public string? DonorJolietPaddingSourcePath { get; set; }
+    public List<DicJolietPaddingEvidence> DonorJolietPaddingRecords { get; set; } = new();
     public List<string> AppliedEntries { get; set; } = new();
     public List<DicRecoveryStateMatch> Matches { get; set; } = new();
 }
@@ -145,6 +149,7 @@ public sealed class DicRecoveryStateService
         }
 
         state.AppliedEntries ??= new List<string>();
+        state.DonorJolietPaddingRecords ??= new List<DicJolietPaddingEvidence>();
         state.Version = CurrentVersion;
         state.BaseName = logs.BaseName;
         state.VolumeIdentifier = inspection.VolumeIdentifier;

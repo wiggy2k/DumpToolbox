@@ -1261,18 +1261,10 @@ public sealed partial class DicLogImportService
         Dictionary<long, byte[]> metadata,
         List<string> warnings)
     {
-        // CeQuadrat 32-bit ISO formatter private information sector, observed on
-        // WinOnCD/CeQuadrat mastered images. The payload is deterministic and
-        // self-identifying:
-        //   0x000  "CeQuadrat ISO 9660 formatter information block"
-        //   0x080  formatter LBA as UInt32 little-endian
-        //   0x084  formatter LBA as UInt32 big-endian
-        //   0x7FC  AA 55 55 AA
-        //   all other bytes zero.
-        //
-        // The sector sits at VolumeSpaceSize - 1.  We only synthesize it when an
-        // exact Type-1 PVD captured by DIC proves CeQuadrat as the Data Preparer.
-        // Existing mainInfo/raw evidence always wins and is never overwritten.
+        // CeQuadrat identity is not sufficient to infer a private footer. Observed
+        // discs include no footer, a text block at VSS-1, and a text block at VSS-2
+        // followed by a compact binary block. Preserve exact evidence, but do not
+        // invent one of those mutually exclusive layouts from the PVD signature.
         if (volume.VolumeSpaceSize <= 0 || volume.VolumeSpaceSize > uint.MaxValue)
             return;
 
@@ -1291,7 +1283,7 @@ public sealed partial class DicLogImportService
             string preparer = Encoding.ASCII
                 .GetString(payload, dataPreparerOffset, dataPreparerLength)
                 .TrimEnd(' ', '\0');
-            if (preparer.StartsWith("CeQuadrat ", StringComparison.OrdinalIgnoreCase))
+            if (IsCeQuadratPreparer(preparer))
             {
                 ceQuadratPvd = true;
                 break;
@@ -1301,25 +1293,14 @@ public sealed partial class DicLogImportService
         if (!ceQuadratPvd)
             return;
 
-        long formatterLba = volume.VolumeSpaceSize - 1;
-        if (formatterLba < 0 || formatterLba > uint.MaxValue || metadata.ContainsKey(formatterLba))
-            return;
-
-        byte[] formatter = new byte[CookedSectorSize];
-        ReadOnlySpan<byte> signature = "CeQuadrat ISO 9660 formatter information block"u8;
-        signature.CopyTo(formatter);
-        uint lba = checked((uint)formatterLba);
-        BinaryPrimitives.WriteUInt32LittleEndian(formatter.AsSpan(0x80, 4), lba);
-        BinaryPrimitives.WriteUInt32BigEndian(formatter.AsSpan(0x84, 4), lba);
-        formatter[0x7FC] = 0xAA;
-        formatter[0x7FD] = 0x55;
-        formatter[0x7FE] = 0x55;
-        formatter[0x7FF] = 0xAA;
-
-        metadata[formatterLba] = formatter;
-        warnings.Add(
-            $"Synthesized CeQuadrat/WinOnCD formatter information block at LBA {formatterLba:N0} (VolumeSpaceSize - 1), " +
-            "using the CeQuadrat Data Preparer signature proven by the original PVD. The block encodes its own LBA in both byte orders and the standard AA 55 55 AA trailer; exact logged metadata would take precedence if present.");
+        long firstCandidateLba = Math.Max(0, volume.VolumeSpaceSize - 2);
+        long finalCandidateLba = volume.VolumeSpaceSize - 1;
+        bool preserved = Enumerable.Range(0, checked((int)(finalCandidateLba - firstCandidateLba + 1)))
+            .Select(offset => firstCandidateLba + offset)
+            .Any(lba => metadata.TryGetValue(lba, out byte[]? payload) && payload.Any(value => value != 0));
+        warnings.Add(preserved
+            ? "Preserved exact CeQuadrat/WinOnCD end-of-volume private metadata supplied by the logs or donor evidence."
+            : "CeQuadrat/WinOnCD mastering was identified, but its end-of-volume private footer was not synthesized: the PVD signature does not determine whether this disc used no footer, a text block at VSS-1, or the text-plus-binary layout at VSS-2/VSS-1. Exact logged or same-disc donor metadata is required.");
     }
 
     private static void TrySynthesizeCeQuadratJolietDirectoryLinkTable(
@@ -1328,7 +1309,7 @@ public sealed partial class DicLogImportService
         CeQuadratLinkTableContext? context,
         List<string> warnings)
     {
-        // WinOnCD/CeQuadrat writes a private one-sector bridge between the Joliet and
+        // WinOnCD/CeQuadrat writes a private bridge between the Joliet and
         // primary ISO9660 directory trees.  The sector is not referenced by ISO9660,
         // so DIC volDesc quite reasonably does not parse it; however its contents are
         // completely derivable once both directory geometries are proven.
@@ -1338,12 +1319,13 @@ public sealed partial class DicLogImportService
         //   0x25  seven zero bytes
         //   0x2c  directory count
         //   0x30  repeated { Joliet directory LBA, primary directory LBA }
-        //   rest of 2048-byte logical sector = zero
+        //   rest of the reserved sector range = zero when synthesized
         if (context is null || directories.Count != context.PrimaryDirectoryExtents.Count)
             return;
 
         // Exact logged/supplied bytes always outrank synthesis.
-        if (metadata.ContainsKey(context.LinkTableLba))
+        if (Enumerable.Range(0, context.ReservedSectorCount)
+            .Any(index => metadata.ContainsKey(context.LinkTableLba + index)))
             return;
 
         var jolietByPrimaryExtent = new Dictionary<uint, JolietDirectoryNode>();
@@ -1368,16 +1350,37 @@ public sealed partial class DicLogImportService
             pairs.Add((checked((uint)directory.ExtentLba), primaryLba));
         }
 
-        const int pairStart = 48;
-        if (pairStart + checked(pairs.Count * 8) > CookedSectorSize)
+        byte[]? payload = BuildCeQuadratJolietLinkTablePayload(pairs, context.ReservedSectorCount);
+        if (payload is null)
             return;
 
-        byte[] payload = new byte[CookedSectorSize];
+        for (int sectorIndex = 0; sectorIndex < context.ReservedSectorCount; sectorIndex++)
+        {
+            byte[] sectorPayload = new byte[CookedSectorSize];
+            payload.AsSpan(sectorIndex * CookedSectorSize, CookedSectorSize).CopyTo(sectorPayload);
+            metadata[context.LinkTableLba + sectorIndex] = sectorPayload;
+        }
+        warnings.Add(
+            $"Synthesized CeQuadrat/WinOnCD Joliet directory link table across {context.ReservedSectorCount:N0} sector(s) from LBA {context.LinkTableLba:N0}: " +
+            $"{pairs.Count:N0} proven Joliet↔primary directory extent pair(s), derived in the original primary Type-L path-table order. " +
+            "Unused reserved bytes are zero because observed dirty tail bytes are not derivable; normal Mode 1 EDC/ECC is regenerated from the synthesized payload.");
+    }
+
+    internal static byte[]? BuildCeQuadratJolietLinkTablePayload(
+        IReadOnlyList<(uint JolietLba, uint PrimaryLba)> pairs,
+        int reservedSectorCount)
+    {
+        if (reservedSectorCount <= 0)
+            return null;
+        const int pairStart = 48;
+        int capacity = checked(reservedSectorCount * CookedSectorSize);
+        if (pairStart + checked(pairs.Count * 8) > capacity)
+            return null;
+
+        byte[] payload = new byte[capacity];
         ReadOnlySpan<byte> signature = "CeQuadrat Joliet directory link table"u8;
         signature.CopyTo(payload);
-        // Bytes 37..43 deliberately remain zero.
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(44, 4), checked((uint)pairs.Count));
-
         int offset = pairStart;
         foreach ((uint jolietLba, uint primaryLba) in pairs)
         {
@@ -1385,12 +1388,7 @@ public sealed partial class DicLogImportService
             BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(offset + 4, 4), primaryLba);
             offset += 8;
         }
-
-        metadata[context.LinkTableLba] = payload;
-        warnings.Add(
-            $"Synthesized CeQuadrat/WinOnCD Joliet directory link table at LBA {context.LinkTableLba:N0}: " +
-            $"{pairs.Count:N0} proven Joliet↔primary directory extent pair(s), derived in the original primary Type-L path-table order. " +
-            "The remaining logical-sector bytes are zero and normal Mode 1 EDC/ECC is regenerated from the synthesized payload.");
+        return payload;
     }
 
     private static bool IsVolumeDescriptorTerminator(ReadOnlySpan<byte> payload)
