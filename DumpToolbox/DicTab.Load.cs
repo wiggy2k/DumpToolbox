@@ -354,11 +354,9 @@ public partial class MainWindow
             if (associatedSourceCount > 0 && _dicMatches.Values.Count(match => (match.Entry.IsoFileFlags & 0x04) != 0) < associatedSourceCount)
             {
                 await ShowMessageAsync(
-                    "DumpToolbox — DIC — ISO Extractor required",
-                    $"This disc contains {associatedSourceCount:N0} non-empty ISO 9660 Associated File record(s). Most mounted filesystems expose only the normal record when the same pathname is shared, so a normal folder copy is not sufficient for byte-perfect recovery. " +
-                    "Open Other Tools → ISO Extractor, extract the source ISO/BIN, then return to DIC and click Match Sources. The extractor output is automatically set as Source Folder. " +
-                    $"Do not delete or rename '{IsoExtractionManifestService.ManifestFileName}' or the '{IsoExtractionManifestService.PrivateDirectoryName}' folder; they preserve the hidden record identity. " +
-                    "An exact donor-image scan remains available as a fallback, but is no longer required when the extractor folder supplies these records.");
+                    "DumpToolbox — DIC — Extract source image",
+                    $"This disc has {associatedSourceCount:N0} hidden ISO {(associatedSourceCount == 1 ? "file" : "files")} that a normal folder copy may miss.\n\n" +
+                    "ISO Extractor will open next. Extract the source disc image, then return to DIC and click Match Sources.");
                 MainTabControl.SelectedItem = OtherToolsTabItem;
                 OtherToolsTabControl.SelectedItem = IsoExtractorTabItem;
             }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.106 — 2026-09-09
+
+### Fixed
+
+- Simplified the DIC associated-file prompt so it states the required ISO Extractor workflow without overwhelming implementation details.
+
 ## 0.8.105 — 2026-09-09
 
 ### Added
