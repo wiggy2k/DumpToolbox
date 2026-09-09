@@ -356,7 +356,7 @@ public partial class MainWindow
                 await ShowMessageAsync(
                     "DumpToolbox — DIC — Extract source image",
                     $"This disc has {associatedSourceCount:N0} hidden ISO {(associatedSourceCount == 1 ? "file" : "files")} that a normal folder copy may miss.\n\n" +
-                    "ISO Extractor will open next. Extract the source disc image, then return to DIC and click Match Sources.");
+                    "ISO Extractor will open next. Extract the source disc image, then return to DIC and click Scan source folder.");
                 MainTabControl.SelectedItem = OtherToolsTabItem;
                 OtherToolsTabControl.SelectedItem = IsoExtractorTabItem;
             }
