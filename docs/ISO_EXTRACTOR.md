@@ -4,7 +4,7 @@ ISO Extractor creates a DIC-compatible source folder from a cooked 2048-byte ISO
 
 ISO9660/Joliet filesystems are read directly rather than mounted through the operating system. This preserves Associated File records and same-path records that a normal filesystem view may hide or collapse.
 
-For a UDF-only image, the extractor reads the UDF tree directly, including write-once virtual partitions that use a Virtual Allocation Table. UDF files are ordinary payload sources only: they do not acquire invented ISO9660 extents, flags, PVD identity, or Joliet authority.
+For a UDF-only image, the extractor reads the UDF tree directly, including write-once virtual partitions that use a Virtual Allocation Table. Immediate VATs and VATs stored in one or more non-contiguous extents are supported, with main/reserve descriptor-sequence fallback. UDF files are ordinary payload sources only: they do not acquire invented ISO9660 extents, flags, PVD identity, or Joliet authority.
 
 ## Output layout
 

@@ -349,7 +349,14 @@ public sealed class UdfImageReader : IDisposable
                 destination[read..].Clear();
         }
 
-        private void ReadPhysicalPayloadSector(long physicalSector, Span<byte> destination)
+        internal long PhysicalSectorCount => PhysicalLength / CookedSectorSize;
+        internal uint PhysicalPartitionStart
+        {
+            get => _physicalPartitionStart;
+            set => _physicalPartitionStart = value;
+        }
+
+        internal void ReadPhysicalPayloadSector(long physicalSector, Span<byte> destination)
         {
             if (destination.Length < CookedSectorSize)
                 throw new ArgumentException("A complete 2048-byte sector buffer is required.", nameof(destination));
@@ -373,82 +380,126 @@ public sealed class UdfImageReader : IDisposable
 
         public void IncludeDeclaredUdfPartitionCapacity()
         {
-            long savedPosition = _position;
-            try
-            {
-                Span<byte> anchor = stackalloc byte[32];
-                Position = 256L * CookedSectorSize;
-                if (Read(anchor) != anchor.Length || BitConverter.ToUInt16(anchor) != 2)
-                    return;
+            if (!TryFindAnchor(out byte[] anchor, out _))
+                return;
 
-                uint sequenceLength = BitConverter.ToUInt32(anchor[16..20]);
-                uint sequenceLba = BitConverter.ToUInt32(anchor[20..24]);
-                long descriptors = Math.Min(256, (sequenceLength + CookedSectorSize - 1L) / CookedSectorSize);
-                byte[] descriptor = new byte[CookedSectorSize];
-                for (long i = 0; i < descriptors; i++)
-                {
-                    Position = checked((sequenceLba + i) * CookedSectorSize);
-                    if (Read(descriptor) != descriptor.Length)
-                        break;
-
-                    ushort tag = BitConverter.ToUInt16(descriptor, 0);
-                    if (tag == 8)
-                        break;
-                    if (tag != 5)
-                        continue;
-
-                    uint start = BitConverter.ToUInt32(descriptor, 188);
-                    uint blocks = BitConverter.ToUInt32(descriptor, 192);
-                    long declaredLength = checked(((long)start + blocks) * CookedSectorSize);
-                    if (declaredLength > _length)
-                        _length = declaredLength;
-                }
-            }
-            finally
-            {
-                _position = savedPosition;
-            }
+            // Either descriptor sequence may be the only readable copy on damaged or
+            // incompletely captured media. Inspect both before extending the logical
+            // stream with the declared, unrecorded partition tail.
+            IncludePartitionCapacityFromSequence(anchor, 16);
+            IncludePartitionCapacityFromSequence(anchor, 24);
         }
 
         public void ConfigureVirtualPartition()
         {
-            byte[] anchor = new byte[CookedSectorSize];
-            ReadPhysicalPayloadSector(256, anchor);
-            if (BitConverter.ToUInt16(anchor, 0) != 2)
+            if (!TryFindAnchor(out byte[] anchor, out _))
                 return;
 
-            uint sequenceLength = BitConverter.ToUInt32(anchor, 16);
-            uint sequenceLba = BitConverter.ToUInt32(anchor, 20);
+            if (!TryReadVirtualPartitionSequence(anchor, 16, out byte[]? logicalVolumeDescriptor,
+                    out long logicalVolumeDescriptorLba, out uint physicalPartitionStart) &&
+                !TryReadVirtualPartitionSequence(anchor, 24, out logicalVolumeDescriptor,
+                    out logicalVolumeDescriptorLba, out physicalPartitionStart))
+                return;
+
+            _physicalPartitionStart = physicalPartitionStart;
+            _virtualAllocationTable = ReadLatestVirtualAllocationTable();
+            _patchedLogicalVolumeDescriptor = ConvertVirtualMapToType1(logicalVolumeDescriptor!);
+            _patchedLogicalVolumeDescriptorLba = logicalVolumeDescriptorLba;
+        }
+
+        private bool TryFindAnchor(out byte[] anchor, out long anchorLba)
+        {
+            long last = PhysicalSectorCount - 1;
+            long[] candidates = { 256, last - 256, last, 512 };
+            var seen = new HashSet<long>();
+            foreach (long lba in candidates)
+            {
+                if (lba < 0 || lba >= PhysicalSectorCount || !seen.Add(lba))
+                    continue;
+                byte[] candidate = new byte[CookedSectorSize];
+                ReadPhysicalPayloadSector(lba, candidate);
+                if (BitConverter.ToUInt16(candidate, 0) != 2)
+                    continue;
+                anchor = candidate;
+                anchorLba = lba;
+                return true;
+            }
+            anchor = Array.Empty<byte>();
+            anchorLba = -1;
+            return false;
+        }
+
+        private void IncludePartitionCapacityFromSequence(byte[] anchor, int extentOffset)
+        {
+            uint sequenceLength = BitConverter.ToUInt32(anchor, extentOffset);
+            uint sequenceLba = BitConverter.ToUInt32(anchor, extentOffset + 4);
+            long descriptors = Math.Min(256, (sequenceLength + CookedSectorSize - 1L) / CookedSectorSize);
+            byte[] descriptor = new byte[CookedSectorSize];
+            for (long i = 0; i < descriptors; i++)
+            {
+                long lba = sequenceLba + i;
+                if (lba < 0 || lba >= PhysicalSectorCount)
+                    break;
+                ReadPhysicalPayloadSector(lba, descriptor);
+                ushort tag = BitConverter.ToUInt16(descriptor, 0);
+                if (tag == 8)
+                    break;
+                if (tag != 5)
+                    continue;
+
+                uint start = BitConverter.ToUInt32(descriptor, 188);
+                uint blocks = BitConverter.ToUInt32(descriptor, 192);
+                long declaredLength = checked(((long)start + blocks) * CookedSectorSize);
+                if (declaredLength > _length)
+                    _length = declaredLength;
+            }
+        }
+
+        private bool TryReadVirtualPartitionSequence(
+            byte[] anchor,
+            int extentOffset,
+            out byte[]? logicalVolumeDescriptor,
+            out long logicalVolumeDescriptorLba,
+            out uint physicalPartitionStart)
+        {
+            uint sequenceLength = BitConverter.ToUInt32(anchor, extentOffset);
+            uint sequenceLba = BitConverter.ToUInt32(anchor, extentOffset + 4);
             int descriptors = checked((int)Math.Min(256, (sequenceLength + CookedSectorSize - 1L) / CookedSectorSize));
-            byte[]? logicalVolumeDescriptor = null;
-            long logicalVolumeDescriptorLba = -1;
+            var partitions = new Dictionary<ushort, uint>();
+            logicalVolumeDescriptor = null;
+            logicalVolumeDescriptorLba = -1;
+            physicalPartitionStart = 0;
             byte[] descriptor = new byte[CookedSectorSize];
 
             for (int i = 0; i < descriptors; i++)
             {
                 long lba = sequenceLba + i;
+                if (lba < 0 || lba >= PhysicalSectorCount)
+                    break;
                 ReadPhysicalPayloadSector(lba, descriptor);
                 ushort tag = BitConverter.ToUInt16(descriptor, 0);
                 if (tag == 8)
                     break;
                 if (tag == 5)
-                    _physicalPartitionStart = BitConverter.ToUInt32(descriptor, 188);
-                if (tag == 6)
+                    partitions[BitConverter.ToUInt16(descriptor, 22)] = BitConverter.ToUInt32(descriptor, 188);
+                if (tag == 6 && ContainsVirtualPartitionMap(descriptor))
                 {
                     logicalVolumeDescriptor = descriptor.ToArray();
                     logicalVolumeDescriptorLba = lba;
                 }
             }
 
-            if (logicalVolumeDescriptor is null || !ContainsVirtualPartitionMap(logicalVolumeDescriptor))
-                return;
-
-            _virtualAllocationTable = ReadLatestVirtualAllocationTable();
-            _patchedLogicalVolumeDescriptor = ConvertVirtualMapToType1(logicalVolumeDescriptor);
-            _patchedLogicalVolumeDescriptorLba = logicalVolumeDescriptorLba;
+            if (logicalVolumeDescriptor is null ||
+                !TryGetVirtualPartitionNumber(logicalVolumeDescriptor, out ushort partitionNumber) ||
+                !partitions.TryGetValue(partitionNumber, out physicalPartitionStart))
+                return false;
+            return true;
         }
 
         private static bool ContainsVirtualPartitionMap(byte[] descriptor)
+            => TryGetVirtualPartitionNumber(descriptor, out _);
+
+        private static bool TryGetVirtualPartitionNumber(byte[] descriptor, out ushort partitionNumber)
         {
             int mapLength = checked((int)BitConverter.ToUInt32(descriptor, 264));
             int mapCount = checked((int)BitConverter.ToUInt32(descriptor, 268));
@@ -462,10 +513,14 @@ public sealed class UdfImageReader : IDisposable
                 {
                     string identifier = System.Text.Encoding.ASCII.GetString(descriptor, position + 5, 23).TrimEnd('\0', ' ');
                     if (identifier.Equals("*UDF Virtual Partition", StringComparison.Ordinal))
+                    {
+                        partitionNumber = BitConverter.ToUInt16(descriptor, position + 38);
                         return true;
+                    }
                 }
                 position += length;
             }
+            partitionNumber = 0;
             return false;
         }
 
@@ -473,51 +528,148 @@ public sealed class UdfImageReader : IDisposable
         {
             byte[] sector = new byte[CookedSectorSize];
             long physicalSectors = PhysicalLength / CookedSectorSize;
-            long firstCandidate = Math.Max(_physicalPartitionStart, physicalSectors - 4096);
-            for (long lba = physicalSectors - 1; lba >= firstCandidate; lba--)
+            for (long lba = physicalSectors - 1; lba >= _physicalPartitionStart; lba--)
             {
                 ReadPhysicalPayloadSector(lba, sector);
                 ushort tag = BitConverter.ToUInt16(sector, 0);
-                if (tag is not (261 or 266) || sector[31] != 0)
+                // ICBTag.FileType is byte 27. UDF 2.x VAT ICBs use type 248;
+                // UDF 1.50 VATs use type 0 and are confirmed by their VAT suffix.
+                if (tag is not (261 or 266) || sector[27] is not (0 or 248))
                     continue;
-
-                int allocationType = BitConverter.ToUInt16(sector, 34) & 0x0007;
-                int eaOffset;
-                int adOffset;
-                int dataOffset;
-                if (tag == 261)
-                {
-                    eaOffset = 168;
-                    adOffset = 172;
-                    dataOffset = 176;
-                }
-                else
-                {
-                    eaOffset = 208;
-                    adOffset = 212;
-                    dataOffset = 216;
-                }
-
-                int extendedAttributes = checked((int)BitConverter.ToUInt32(sector, eaOffset));
-                int allocationDescriptors = checked((int)BitConverter.ToUInt32(sector, adOffset));
-                if (allocationType != 3 || allocationDescriptors <= 0 ||
-                    dataOffset + extendedAttributes + allocationDescriptors > sector.Length)
+                if (!TryReadFileContents(sector, out byte[] vat))
                     continue;
-
-                ReadOnlySpan<byte> vat = sector.AsSpan(dataOffset + extendedAttributes, allocationDescriptors);
-                if (!TryGetVatEntries(vat, out int entriesOffset, out int count) || count == 0)
+                if (!TryGetVatEntriesForFileType(sector[27], vat, out int entriesOffset, out int count) || count == 0)
                     continue;
 
                 var table = new uint[count];
                 for (int i = 0; i < count; i++)
-                    table[i] = BitConverter.ToUInt32(vat.Slice(entriesOffset + i * 4, 4));
+                    table[i] = BitConverter.ToUInt32(vat.AsSpan(entriesOffset + i * 4, 4));
                 return table;
             }
 
             throw new InvalidDataException("The UDF virtual partition map is present, but its latest Virtual Allocation Table could not be found near the end of the recorded image.");
         }
 
-        private static bool TryGetVatEntries(ReadOnlySpan<byte> vat, out int offset, out int count)
+        internal bool TryReadVatFileAt(long lba, out byte[] fileEntry, out byte[] contents)
+        {
+            fileEntry = new byte[CookedSectorSize];
+            ReadPhysicalPayloadSector(lba, fileEntry);
+            ushort tag = BitConverter.ToUInt16(fileEntry, 0);
+            if (tag is not (261 or 266) || fileEntry[27] is not (0 or 248) ||
+                !TryReadFileContents(fileEntry, out contents) ||
+                !TryGetVatEntriesForFileType(fileEntry[27], contents, out _, out int count) || count == 0)
+            {
+                contents = Array.Empty<byte>();
+                return false;
+            }
+            return true;
+        }
+
+        private bool TryReadFileContents(byte[] fileEntry, out byte[] contents)
+        {
+            ushort tag = BitConverter.ToUInt16(fileEntry, 0);
+            int allocationType = BitConverter.ToUInt16(fileEntry, 34) & 0x0007;
+            int eaOffset = tag == 261 ? 168 : 208;
+            int adOffset = tag == 261 ? 172 : 212;
+            int dataOffset = tag == 261 ? 176 : 216;
+            ulong declaredInformationLength = BitConverter.ToUInt64(fileEntry, 56);
+            uint declaredExtendedAttributes = BitConverter.ToUInt32(fileEntry, eaOffset);
+            uint declaredAllocationDescriptors = BitConverter.ToUInt32(fileEntry, adOffset);
+            if (declaredInformationLength == 0 || declaredInformationLength > int.MaxValue ||
+                declaredExtendedAttributes > int.MaxValue || declaredAllocationDescriptors == 0 ||
+                declaredAllocationDescriptors > int.MaxValue)
+            {
+                contents = Array.Empty<byte>();
+                return false;
+            }
+
+            int informationLength = (int)declaredInformationLength;
+            int extendedAttributes = (int)declaredExtendedAttributes;
+            int allocationDescriptors = (int)declaredAllocationDescriptors;
+            if (extendedAttributes > fileEntry.Length - dataOffset)
+            {
+                contents = Array.Empty<byte>();
+                return false;
+            }
+            int descriptorOffset = dataOffset + extendedAttributes;
+            if (allocationDescriptors > fileEntry.Length - descriptorOffset)
+            {
+                contents = Array.Empty<byte>();
+                return false;
+            }
+
+            contents = new byte[informationLength];
+            if (allocationType == 3)
+            {
+                if (informationLength > allocationDescriptors)
+                {
+                    contents = Array.Empty<byte>();
+                    return false;
+                }
+                fileEntry.AsSpan(descriptorOffset, informationLength).CopyTo(contents);
+                return true;
+            }
+
+            int descriptorSize = allocationType switch { 0 => 8, 1 => 16, 2 => 20, _ => 0 };
+            if (descriptorSize == 0 || allocationDescriptors % descriptorSize != 0)
+            {
+                contents = Array.Empty<byte>();
+                return false;
+            }
+
+            int written = 0;
+            ReadOnlySpan<byte> descriptors = fileEntry.AsSpan(descriptorOffset, allocationDescriptors);
+            for (int offset = 0; offset + descriptorSize <= descriptors.Length && written < contents.Length; offset += descriptorSize)
+            {
+                ReadOnlySpan<byte> descriptor = descriptors.Slice(offset, descriptorSize);
+                uint rawLength = BitConverter.ToUInt32(descriptor[..4]);
+                int extentType = (int)(rawLength >> 30);
+                int extentLength = checked((int)(rawLength & 0x3FFFFFFF));
+                if (extentLength == 0)
+                    continue;
+                if (extentType != 0)
+                {
+                    contents = Array.Empty<byte>();
+                    return false;
+                }
+
+                uint block = allocationType switch
+                {
+                    0 => BitConverter.ToUInt32(descriptor[4..8]),
+                    1 => BitConverter.ToUInt32(descriptor[4..8]),
+                    2 => BitConverter.ToUInt32(descriptor[12..16]),
+                    _ => 0
+                };
+                int recordedLength = allocationType == 2
+                    ? checked((int)Math.Min(BitConverter.ToUInt32(descriptor[4..8]), int.MaxValue))
+                    : extentLength;
+                int take = Math.Min(contents.Length - written, Math.Min(extentLength, recordedLength));
+                ReadPhysicalPartitionBytes(block, contents.AsSpan(written, take));
+                written += take;
+            }
+
+            if (written == contents.Length)
+                return true;
+            contents = Array.Empty<byte>();
+            return false;
+        }
+
+        private void ReadPhysicalPartitionBytes(uint firstBlock, Span<byte> destination)
+        {
+            byte[] sector = new byte[CookedSectorSize];
+            int copied = 0;
+            while (copied < destination.Length)
+            {
+                long blockOffset = copied / CookedSectorSize;
+                int inSector = copied % CookedSectorSize;
+                ReadPhysicalPayloadSector(checked(_physicalPartitionStart + firstBlock + blockOffset), sector);
+                int take = Math.Min(CookedSectorSize - inSector, destination.Length - copied);
+                sector.AsSpan(inSector, take).CopyTo(destination[copied..]);
+                copied += take;
+            }
+        }
+
+        internal static bool TryGetVatEntries(ReadOnlySpan<byte> vat, out int offset, out int count)
         {
             if (vat.Length >= 152)
             {
@@ -532,6 +684,36 @@ public sealed class UdfImageReader : IDisposable
                 }
             }
 
+            return TryGetOldVatEntries(vat, out offset, out count);
+        }
+
+        internal static bool TryGetVatEntriesForFileType(
+            byte fileType,
+            ReadOnlySpan<byte> vat,
+            out int offset,
+            out int count)
+        {
+            if (fileType == 248 && vat.Length >= 152)
+            {
+                int headerLength = BitConverter.ToUInt16(vat[..2]);
+                int implementationUseLength = BitConverter.ToUInt16(vat[2..4]);
+                if (headerLength >= 152 + implementationUseLength && headerLength <= vat.Length &&
+                    ((vat.Length - headerLength) & 3) == 0)
+                {
+                    offset = headerLength;
+                    count = (vat.Length - headerLength) / 4;
+                    return true;
+                }
+            }
+            if (fileType == 0)
+                return TryGetOldVatEntries(vat, out offset, out count);
+            offset = 0;
+            count = 0;
+            return false;
+        }
+
+        private static bool TryGetOldVatEntries(ReadOnlySpan<byte> vat, out int offset, out int count)
+        {
             const int oldVatSuffixLength = 36;
             if (vat.Length >= oldVatSuffixLength && ((vat.Length - oldVatSuffixLength) & 3) == 0)
             {

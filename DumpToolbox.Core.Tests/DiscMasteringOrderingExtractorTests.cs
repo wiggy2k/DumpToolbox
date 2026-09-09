@@ -68,7 +68,14 @@ public sealed class DiscMasteringOrderingExtractorTests
     [Fact]
     public void EvidenceSchemaRequiresExistingUnitsToBeRegathered()
     {
-        Assert.Equal(5, DiscEvidenceService.EvidenceSchema);
+        Assert.Equal(6, DiscEvidenceService.EvidenceSchema);
+    }
+
+    [Fact]
+    public void EvidenceMediaClassificationDoesNotTreatCdSizedUdfGeometryAsDvd()
+    {
+        Assert.Equal("CD", DiscEvidenceService.ClassifyMediaForEvidence(191_356, 450_069_312));
+        Assert.Equal("DVD", DiscEvidenceService.ClassifyMediaForEvidence(500_000, 1_024_000_000));
     }
 
     [Fact]
@@ -124,11 +131,11 @@ public sealed class DiscMasteringOrderingExtractorTests
                 await connection.OpenAsync();
                 using SqliteCommand command = connection.CreateCommand();
                 command.CommandText = "SELECT value FROM meta WHERE key='schema_version'";
-                Assert.Equal("4", (string)(await command.ExecuteScalarAsync())!);
+                Assert.Equal("5", (string)(await command.ExecuteScalarAsync())!);
                 command.CommandText = @"
 SELECT COUNT(*) FROM sqlite_master
-WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_table_records','namespace_record_pairs','mastering_observations');";
-                Assert.Equal(5L, (long)(await command.ExecuteScalarAsync())!);
+WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_table_records','namespace_record_pairs','mastering_observations','udf_descriptors','udf_partition_maps','udf_vats');";
+                Assert.Equal(8L, (long)(await command.ExecuteScalarAsync())!);
             }
 
             Assert.True(File.Exists(Path.Combine(exports, "volume_descriptor_observations.csv")));
@@ -137,6 +144,9 @@ WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_
             Assert.True(File.Exists(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")));
             Assert.True(File.Exists(Path.Combine(exports, "filesystem_record_observations.csv")));
             Assert.True(File.Exists(Path.Combine(exports, "mastering_region_observations.csv")));
+            Assert.True(File.Exists(Path.Combine(exports, "udf_descriptor_observations.csv")));
+            Assert.True(File.Exists(Path.Combine(exports, "udf_partition_map_observations.csv")));
+            Assert.True(File.Exists(Path.Combine(exports, "udf_vat_observations.csv")));
             Assert.StartsWith("Source,Image,PVDSystemId", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_directory_record_order.csv")), StringComparison.Ordinal);
             Assert.Contains("AliasedPathTable", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_path_table_order.csv")), StringComparison.Ordinal);
             Assert.Contains("ISOToJolietCandidates", await File.ReadAllTextAsync(Path.Combine(exports, "joliet_iso9660_record_pairs.csv")), StringComparison.Ordinal);

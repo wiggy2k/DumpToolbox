@@ -37,6 +37,8 @@ The matcher does not accept size-only or arbitrary filename guesses. Validated u
 
 A cooked ISO or raw BIN/IMG can supply payloads. Same-disc primary metadata is copied only when PVD identity and volume label match. A UDF-only image has no comparable ISO9660 PVD, so it is always payload-only and never supplies filesystem metadata, Joliet identity, or raw-sector exactness. Mandatory donor regions include non-empty Associated File payloads, Extended Attribute Records, and ambiguous colliding non-associated records that a mounted filesystem cannot prove.
 
+UDF VAT/VDS history is intentionally not folded into logical file SHA-1 matching. Disc Evidence can preserve and compare those structures separately, but DIC cannot synthesize a byte-exact UDF mastering from a logical file tree or ordinary `*_volDesc.txt` evidence. Exact UDF reconstruction requires the original structural sectors or equivalent raw descriptor/VAT evidence.
+
 Optional exactness regions—such as unproven system area, file-tail slack or missing metadata—remain zero-filled in a best-effort rebuild unless an exact same-disc donor supplies them. Raw-only anomalies require a 2352-byte donor; a cooked donor cannot provide Mode 2 Form 2 payload bytes or malformed raw framing.
 
 ## Sector evidence

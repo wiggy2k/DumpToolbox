@@ -14,6 +14,8 @@ Source filenames do not need to match the image: normal files are matched by SHA
 
 UDF source files are hashed and streamed as logical file contents. UDF cannot supply an alternate raw 2324-byte Mode 2 Form 2 `.XA` payload, because that physical-sector information is outside the filesystem file stream.
 
+The SHA-1 catalogue deliberately hashes UDF file payloads independently of the UDF partition and VAT layout. Disc Evidence records descriptor/VAT fingerprints and previous generations separately, so two discs with identical files can still be distinguished by their mastering structures without preventing payload reuse.
+
 ## Sector handling
 
 - Cooked 2048-byte skeletons are patched directly.

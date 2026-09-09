@@ -7,7 +7,7 @@ namespace DumpToolbox.Core;
 
 public sealed partial class DiscEvidenceService
 {
-    private const int EvidenceDatabaseSchema = 4;
+    private const int EvidenceDatabaseSchema = 5;
 
     private static async Task EnsureOrderingSchemaAsync(SqliteConnection db, CancellationToken cancellationToken)
     {
@@ -97,6 +97,42 @@ CREATE TABLE IF NOT EXISTS mastering_observations(
  first_nonzero_offset INTEGER,payload_sha1 TEXT NOT NULL,duplicate_lba INTEGER,details TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_mastering_observations_image ON mastering_observations(image_id,region,start_lba);
 UPDATE meta SET value='4' WHERE key='schema_version';";
+            await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            version = 4;
+        }
+
+        if (version < 5)
+        {
+            using SqliteCommand migrate = db.CreateCommand();
+            migrate.CommandText = @"
+CREATE TABLE IF NOT EXISTS udf_descriptors(
+ id INTEGER PRIMARY KEY,image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+ sequence_name TEXT NOT NULL,sequence_index INTEGER NOT NULL,lba INTEGER NOT NULL,
+ tag_id INTEGER NOT NULL,tag_version INTEGER NOT NULL,tag_checksum INTEGER NOT NULL,
+ tag_checksum_valid INTEGER NOT NULL,tag_serial INTEGER NOT NULL,descriptor_crc INTEGER NOT NULL,
+ descriptor_crc_length INTEGER NOT NULL,descriptor_crc_valid INTEGER NOT NULL,tag_location INTEGER NOT NULL,
+ reserved_nonzero_bytes INTEGER NOT NULL,implementation_identifier TEXT NOT NULL,
+ payload BLOB NOT NULL,payload_sha1 TEXT NOT NULL,details TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS udf_partition_maps(
+ id INTEGER PRIMARY KEY,image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+ lvd_lba INTEGER NOT NULL,map_index INTEGER NOT NULL,map_type INTEGER NOT NULL,map_length INTEGER NOT NULL,
+ identifier TEXT NOT NULL,volume_sequence_number INTEGER NOT NULL,partition_number INTEGER NOT NULL,
+ reserved_nonzero_bytes INTEGER NOT NULL,payload BLOB NOT NULL,payload_sha1 TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS udf_vats(
+ id INTEGER PRIMARY KEY,image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+ generation INTEGER NOT NULL,is_latest INTEGER NOT NULL,lba INTEGER NOT NULL,partition_block INTEGER NOT NULL,
+ tag_id INTEGER NOT NULL,file_type INTEGER NOT NULL,tag_serial INTEGER NOT NULL,
+ tag_checksum_valid INTEGER NOT NULL,descriptor_crc_valid INTEGER NOT NULL,allocation_type INTEGER NOT NULL,
+ information_length INTEGER NOT NULL,header_length INTEGER NOT NULL,implementation_use_length INTEGER NOT NULL,
+ implementation_identifier TEXT NOT NULL,implementation_use BLOB NOT NULL,previous_vat_icb_location INTEGER NOT NULL,
+ file_count INTEGER NOT NULL,directory_count INTEGER NOT NULL,minimum_read_revision INTEGER NOT NULL,
+ minimum_write_revision INTEGER NOT NULL,maximum_write_revision INTEGER NOT NULL,entry_count INTEGER NOT NULL,
+ mapped_entry_count INTEGER NOT NULL,unused_entry_count INTEGER NOT NULL,out_of_range_entry_count INTEGER NOT NULL,
+ reserved_nonzero_bytes INTEGER NOT NULL,payload BLOB NOT NULL,payload_sha1 TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_udf_descriptors_image ON udf_descriptors(image_id,sequence_name,sequence_index);
+CREATE INDEX IF NOT EXISTS ix_udf_partition_maps_image ON udf_partition_maps(image_id,lvd_lba,map_index);
+CREATE INDEX IF NOT EXISTS ix_udf_vats_image ON udf_vats(image_id,generation);
+UPDATE meta SET value='5' WHERE key='schema_version';";
             await migrate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
     }
@@ -317,6 +353,32 @@ m.sector_count,m.nonzero_sector_count,m.nonzero_bytes,m.first_nonzero_offset,m.p
 FROM mastering_observations m JOIN images i ON i.id=m.image_id
 LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
 ORDER BY s.source_path,i.display_name,m.region,m.start_lba,m.kind;").ConfigureAwait(false);
+        await ExportAsync("udf_descriptor_observations.csv",
+            "Source,Image,Media,Sequence,SequenceIndex,LBA,TagId,TagVersion,TagChecksum,TagChecksumValid,TagSerial,DescriptorCRC,DescriptorCRCLength,DescriptorCRCValid,TagLocation,ReservedNonZeroBytes,ImplementationIdentifier,PayloadSHA1,Details",
+            @"SELECT s.source_path,i.display_name,i.media_type,u.sequence_name,u.sequence_index,u.lba,u.tag_id,
+u.tag_version,u.tag_checksum,u.tag_checksum_valid,u.tag_serial,u.descriptor_crc,u.descriptor_crc_length,
+u.descriptor_crc_valid,u.tag_location,u.reserved_nonzero_bytes,u.implementation_identifier,u.payload_sha1,u.details
+FROM udf_descriptors u JOIN images i ON i.id=u.image_id
+LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
+ORDER BY s.source_path,i.display_name,u.sequence_name,u.sequence_index,u.lba;").ConfigureAwait(false);
+        await ExportAsync("udf_partition_map_observations.csv",
+            "Source,Image,Media,LVDLBA,MapIndex,MapType,MapLength,Identifier,VolumeSequenceNumber,PartitionNumber,ReservedNonZeroBytes,PayloadSHA1",
+            @"SELECT s.source_path,i.display_name,i.media_type,u.lvd_lba,u.map_index,u.map_type,u.map_length,
+u.identifier,u.volume_sequence_number,u.partition_number,u.reserved_nonzero_bytes,u.payload_sha1
+FROM udf_partition_maps u JOIN images i ON i.id=u.image_id
+LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
+ORDER BY s.source_path,i.display_name,u.lvd_lba,u.map_index;").ConfigureAwait(false);
+        await ExportAsync("udf_vat_observations.csv",
+            "Source,Image,Media,Generation,IsLatest,LBA,PartitionBlock,TagId,FileType,TagSerial,TagChecksumValid,DescriptorCRCValid,AllocationType,InformationLength,HeaderLength,ImplementationUseLength,ImplementationIdentifier,ImplementationUseHex,PreviousVATICBLocation,FileCount,DirectoryCount,MinimumReadRevision,MinimumWriteRevision,MaximumWriteRevision,EntryCount,MappedEntryCount,UnusedEntryCount,OutOfRangeEntryCount,ReservedNonZeroBytes,PayloadSHA1",
+            @"SELECT s.source_path,i.display_name,i.media_type,u.generation,u.is_latest,u.lba,u.partition_block,
+u.tag_id,u.file_type,u.tag_serial,u.tag_checksum_valid,u.descriptor_crc_valid,u.allocation_type,
+u.information_length,u.header_length,u.implementation_use_length,u.implementation_identifier,hex(u.implementation_use),
+u.previous_vat_icb_location,u.file_count,u.directory_count,u.minimum_read_revision,u.minimum_write_revision,
+u.maximum_write_revision,u.entry_count,u.mapped_entry_count,u.unused_entry_count,u.out_of_range_entry_count,
+u.reserved_nonzero_bytes,u.payload_sha1
+FROM udf_vats u JOIN images i ON i.id=u.image_id
+LEFT JOIN scans s ON s.catalogue_unit_id=i.catalogue_unit_id
+ORDER BY s.source_path,i.display_name,u.generation;").ConfigureAwait(false);
         await ExportAsync("joliet_path_table_order.csv",
             "Source,Image,PVDSystemId,PVDApplicationId,PVDDataPreparerId,PVDPublisherId,SVDSystemId,SVDApplicationId,SVDDataPreparerId,SVDPublisherId,EscapeSequence,AliasedPathTable,TableKind,TableLBA,RecordIndex,RecordOffset,DirectoryNumber,ParentDirectoryNumber,Extent,Identifier,IdentifierBytesHex",
             @"SELECT s.source_path,i.display_name,

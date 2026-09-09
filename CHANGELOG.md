@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Disc Evidence now records UDF anchors, main and reserve descriptor sequences, partition maps, descriptor tag checksum/CRC status, required-zero violations, exact raw structure bytes and fingerprints, and complete current/previous Virtual Allocation Table generations in dedicated database tables and CSV exports.
+- UDF VAT loading now supports immediate tables and recorded short, long, or extended allocation descriptors, including tables split across non-contiguous extents.
+
+### Fixed
+
+- UDF VAT discovery now reads the ICB File Type from its correct byte, accepts the UDF 2.x type 248 and confirmed UDF 1.50 form, searches the complete recorded partition, and can fall back to alternate anchors or the reserve volume descriptor sequence.
+- Disc Evidence no longer classifies every UDF filesystem as DVD; CD-sized UDF images remain CDs.
+
+### Tests
+
+- Added regression coverage for the VAT ICB File Type offset, non-contiguous short allocation descriptors, UDF partition-map evidence and previous VAT generations.
+
 ## 0.8.106 — 2026-09-09
 
 ### Fixed

@@ -8,7 +8,7 @@ public sealed record DiscEvidenceProgress(string Phase, string Source, int Compl
 
 public sealed partial class DiscEvidenceService
 {
-    public const int EvidenceSchema = 5;
+    public const int EvidenceSchema = 6;
     private readonly SkeletoolCatalogueService _catalogue;
     private readonly JolietNamingRuleSet _namingRules;
     public string DatabasePath { get; }
@@ -149,17 +149,22 @@ ORDER BY s.source_path,i.display_name,e.path";
         await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024*1024, FileOptions.Asynchronous|FileOptions.RandomAccess);
         SectorReader reader = await SectorReader.DetectAsync(fs, ct).ConfigureAwait(false);
         long logicalSectors = fs.Length / reader.PhysicalSectorSize;
-        bool dvdSized = logicalSectors > 450_000 || fs.Length > 900L*1024*1024;
         bool udf = await DetectUdfAsync(reader, ct).ConfigureAwait(false);
+        UdfStructureEvidence udfStructures = udf
+            ? UdfStructureInspector.Inspect(path, ct)
+            : UdfStructureEvidence.Empty;
         List<DiscVolumeDescriptorEvidence> descriptors = await DiscMasteringOrderingExtractor.ReadDescriptorsAsync(
             reader.ReadAsync, ct).ConfigureAwait(false);
         DiscVolumeDescriptorEvidence? primary = descriptors.FirstOrDefault(item => item.Namespace == "ISO9660");
         DiscVolumeDescriptorEvidence? joliet = descriptors.FirstOrDefault(item => item.Namespace == "JOLIET");
-        string media = dvdSized || udf ? "DVD" : "CD";
+        // UDF is valid on CD-R/CD-RW as well as DVD/BD media. Presence of UDF
+        // therefore must not override the geometry-based media classification.
+        string media = ClassifyMediaForEvidence(logicalSectors, fs.Length);
         if (primary is null)
         {
-            log?.Report($"    media={media}; ISO9660 PVD not found; UDF={(udf?"yes":"no")}");
-            return new(media, udf, null, null, descriptors, [], [], [], [], [], []);
+            log?.Report($"    media={media}; ISO9660 PVD not found; UDF={(udf?"yes":"no")}; " +
+                $"UDF descriptors={udfStructures.Descriptors.Count:N0}; VAT generations={udfStructures.Vats.Count:N0}");
+            return new(media, udf, null, null, descriptors, [], [], [], [], [], [], udfStructures);
         }
         List<DiscFilesystemRecordEvidence> iso = await DiscMasteringOrderingExtractor.ReadTreeAsync(
             reader.ReadBytesAsync, primary, ct).ConfigureAwait(false);
@@ -221,8 +226,8 @@ ORDER BY s.source_path,i.display_name,e.path";
         }
         List<DiscMasteringObservation> mastering = await InspectMasteringObservationsAsync(
             reader, descriptors, iso, jol, ct).ConfigureAwait(false);
-        log?.Report($"    media={media}; udf={(udf?"yes":"no")}; descriptors={descriptors.Count:N0}; ISO={iso.Count:N0}; Joliet={jol.Count:N0}; path-table records={pathTables.Count:N0}; pairs={pairs.Count:N0}; EOF={eofs.Count:N0}; mastering observations={mastering.Count:N0}");
-        return new(media,udf,primary,joliet,descriptors,iso,jol,pathTables,pairs,eofs,mastering);
+        log?.Report($"    media={media}; udf={(udf?"yes":"no")}; descriptors={descriptors.Count:N0}; ISO={iso.Count:N0}; Joliet={jol.Count:N0}; path-table records={pathTables.Count:N0}; pairs={pairs.Count:N0}; EOF={eofs.Count:N0}; mastering observations={mastering.Count:N0}; UDF descriptors={udfStructures.Descriptors.Count:N0}; VAT generations={udfStructures.Vats.Count:N0}");
+        return new(media,udf,primary,joliet,descriptors,iso,jol,pathTables,pairs,eofs,mastering,udfStructures);
     }
 
     private static (uint Length, bool IsDirectory, bool IsAssociated, int PathDepth) CandidateGeometry(DiscFilesystemRecordEvidence record)
@@ -263,6 +268,9 @@ ORDER BY s.source_path,i.display_name,e.path";
             : null;
         return new DiscEvidenceCandidateCounts(projected.Length, afterTimestamp);
     }
+
+    internal static string ClassifyMediaForEvidence(long logicalSectors, long imageBytes)
+        => logicalSectors > 450_000 || imageBytes > 900L * 1024 * 1024 ? "DVD" : "CD";
 
     private static bool RecordingTimesEquivalent(DateTimeOffset left, DateTimeOffset right)
         => Math.Abs((left.ToUniversalTime() - right.ToUniversalTime()).TotalSeconds) < 1.0 ||
@@ -306,11 +314,12 @@ CREATE INDEX IF NOT EXISTS ix_name_pairs_image ON name_pairs(image_id); CREATE I
     {
         await using var db=await OpenAsync(ct); await using var tx=(SqliteTransaction)await db.BeginTransactionAsync(ct);
         using var up=db.CreateCommand();up.Transaction=tx;up.CommandText=@"INSERT INTO images(catalogue_image_id,catalogue_unit_id,display_name,entry_path,media_type,udf_present,status,error) VALUES($i,$u,$d,$e,$m,$f,'complete',NULL) ON CONFLICT(catalogue_image_id) DO UPDATE SET media_type=excluded.media_type,udf_present=excluded.udf_present,status='complete',error=NULL RETURNING id";up.Parameters.AddWithValue("$i",image.Id);up.Parameters.AddWithValue("$u",unit.Id);up.Parameters.AddWithValue("$d",image.DisplayName);up.Parameters.AddWithValue("$e",image.EntryPath);up.Parameters.AddWithValue("$m",ev.Media);up.Parameters.AddWithValue("$f",ev.UdfPresent?1:0);long imageId=Convert.ToInt64(await up.ExecuteScalarAsync(ct));
-        foreach(string table in new[]{"descriptors","name_pairs","eof_observations","volume_descriptors","filesystem_records","path_table_records","namespace_record_pairs","mastering_observations"}){using var del=db.CreateCommand();del.Transaction=tx;del.CommandText=$"DELETE FROM {table} WHERE image_id=$i";del.Parameters.AddWithValue("$i",imageId);await del.ExecuteNonQueryAsync(ct);}
+        foreach(string table in new[]{"descriptors","name_pairs","eof_observations","volume_descriptors","filesystem_records","path_table_records","namespace_record_pairs","mastering_observations","udf_descriptors","udf_partition_maps","udf_vats"}){using var del=db.CreateCommand();del.Transaction=tx;del.CommandText=$"DELETE FROM {table} WHERE image_id=$i";del.Parameters.AddWithValue("$i",imageId);await del.ExecuteNonQueryAsync(ct);}
         foreach(var d in new[]{ev.Primary,ev.Joliet}.Where(x=>x is not null).Cast<DiscVolumeDescriptorEvidence>()){using var c=db.CreateCommand();c.Transaction=tx;c.CommandText=@"INSERT INTO descriptors(image_id,namespace,system_id,volume_id,publisher_id,data_preparer_id,application_id,root_extent,root_length) VALUES($i,$n,$s,$v,$p,$d,$a,$r,$l)";c.Parameters.AddWithValue("$i",imageId);c.Parameters.AddWithValue("$n",d.Namespace);c.Parameters.AddWithValue("$s",d.SystemId);c.Parameters.AddWithValue("$v",d.VolumeId);c.Parameters.AddWithValue("$p",d.PublisherId);c.Parameters.AddWithValue("$d",d.DataPreparerId);c.Parameters.AddWithValue("$a",d.ApplicationId);c.Parameters.AddWithValue("$r",d.RootExtent);c.Parameters.AddWithValue("$l",d.RootLength);await c.ExecuteNonQueryAsync(ct);}
         foreach(var n in ev.Pairs){using var c=db.CreateCommand();c.Transaction=tx;c.CommandText=@"INSERT INTO name_pairs(image_id,iso_path,joliet_path,extent,length,flags) VALUES($i,$a,$b,$e,$l,$f)";c.Parameters.AddWithValue("$i",imageId);c.Parameters.AddWithValue("$a",n.IsoPath);c.Parameters.AddWithValue("$b",n.JolietPath);c.Parameters.AddWithValue("$e",n.Extent);c.Parameters.AddWithValue("$l",n.Length);c.Parameters.AddWithValue("$f",n.Flags);await c.ExecuteNonQueryAsync(ct);}
         foreach(var e in ev.Eofs){using var c=db.CreateCommand();c.Transaction=tx;c.CommandText=@"INSERT INTO eof_observations(image_id,path,extent,length,tail_offset,tail_length,status,nonzero_bytes,match_count,delta_sectors) VALUES($i,$p,$e,$l,$o,$t,$s,$n,$m,$d)";c.Parameters.AddWithValue("$i",imageId);c.Parameters.AddWithValue("$p",e.Path);c.Parameters.AddWithValue("$e",e.Extent);c.Parameters.AddWithValue("$l",e.Length);c.Parameters.AddWithValue("$o",e.TailOffset);c.Parameters.AddWithValue("$t",e.TailLength);c.Parameters.AddWithValue("$s",e.Status);c.Parameters.AddWithValue("$n",e.NonZeroBytes);c.Parameters.AddWithValue("$m",e.MatchCount);c.Parameters.AddWithValue("$d",e.DeltaSectors);await c.ExecuteNonQueryAsync(ct);}
         await StoreOrderingEvidenceAsync(db, tx, imageId, ev, ct).ConfigureAwait(false);
+        await StoreUdfEvidenceAsync(db, tx, imageId, ev.UdfStructures, ct).ConfigureAwait(false);
         await tx.CommitAsync(ct);
     }
 
@@ -328,7 +337,7 @@ CREATE INDEX IF NOT EXISTS ix_name_pairs_image ON name_pairs(image_id); CREATE I
         DiscVolumeDescriptorEvidence? Joliet,List<DiscVolumeDescriptorEvidence> Descriptors,
         List<DiscFilesystemRecordEvidence> Iso,List<DiscFilesystemRecordEvidence> JolietRecords,
         List<DiscPathTableRecordEvidence> PathTables,List<NamePair> Pairs,List<EofObservation> Eofs,
-        List<DiscMasteringObservation> MasteringObservations);
+        List<DiscMasteringObservation> MasteringObservations,UdfStructureEvidence UdfStructures);
 
     private sealed class SectorReader
     {
