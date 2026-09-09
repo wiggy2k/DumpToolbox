@@ -260,10 +260,14 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
                                 "SHA-1 catalogue image (deferred)", relativePath, lba, size,
                                 SourceImageExtents: imageExtents, CatalogueSource: catalogueSource);
                         }
-                        else if (scannerKind.Equals("7z", StringComparison.OrdinalIgnoreCase))
+                        else if (scannerKind.Equals("7z", StringComparison.OrdinalIgnoreCase) ||
+                                 scannerKind.Equals("UDF", StringComparison.OrdinalIgnoreCase))
                         {
                             result[entry.Path] = new SkeletonSourceMatch(resolved, sourcePath, hash!.ToLowerInvariant(), false,
-                                "SHA-1 catalogue extracted file (deferred)", relativePath, SourceLength: size,
+                                scannerKind.Equals("UDF", StringComparison.OrdinalIgnoreCase)
+                                    ? "SHA-1 catalogue UDF file (deferred)"
+                                    : "SHA-1 catalogue extracted file (deferred)",
+                                relativePath, SourceLength: size,
                                 CatalogueSource: catalogueSource);
                         }
                         if (result.ContainsKey(entry.Path)) break;
@@ -326,6 +330,23 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
                 {
                     SourcePath = filePath,
                     MatchMethod = "SHA-1 catalogue extracted file",
+                    CatalogueSource = null
+                };
+                continue;
+            }
+
+            if (source.ScannerKind.Equals("UDF", StringComparison.OrdinalIgnoreCase))
+            {
+                string filePath = await MaterializeUdfFileFromImageAsync(
+                    imagePath, source.RelativePath, source.UnitSha1, source.ImageId, cancellationToken).ConfigureAwait(false);
+                long expected = match.SourceLength ?? match.Entry.DataLength;
+                if (!File.Exists(filePath) || new FileInfo(filePath).Length != expected)
+                    throw new InvalidDataException($"SHA-1 catalogue UDF payload '{source.RelativePath}' did not materialize at the expected {expected:N0} bytes.");
+
+                result[path] = match with
+                {
+                    SourcePath = filePath,
+                    MatchMethod = "SHA-1 catalogue UDF file",
                     CatalogueSource = null
                 };
                 continue;
@@ -726,6 +747,36 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
         string? discovered = Directory.EnumerateFiles(dir, Path.GetFileName(rel), SearchOption.AllDirectories)
             .FirstOrDefault(p => Norm(Path.GetRelativePath(dir, p)).Equals(normalized, StringComparison.OrdinalIgnoreCase));
         return discovered ?? throw new FileNotFoundException($"The catalogue file '{relativePath}' could not be extracted from '{imagePath}'.");
+    }
+
+    private async Task<string> MaterializeUdfFileFromImageAsync(string imagePath, string relativePath, string unitSha1, long imageId, CancellationToken ct)
+    {
+        string dir = Path.Combine(CacheDirectory, unitSha1[..Math.Min(16, unitSha1.Length)], imageId.ToString(), "udf_files");
+        string rel = relativePath.TrimStart('/', '\\').Replace('/', Path.DirectorySeparatorChar);
+        string dest = Path.Combine(dir, rel);
+        if (File.Exists(dest))
+            return dest;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+        string partial = dest + ".partial";
+        try
+        {
+            using UdfImageReader udf = UdfImageReader.Open(imagePath);
+            using Stream input = udf.OpenFile(relativePath);
+            await using (var output = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await input.CopyToAsync(output, 1024 * 1024, ct).ConfigureAwait(false);
+                await output.FlushAsync(ct).ConfigureAwait(false);
+            }
+            File.Move(partial, dest, true);
+            return dest;
+        }
+        catch
+        {
+            try { if (File.Exists(partial)) File.Delete(partial); } catch { }
+            throw;
+        }
     }
 
     private async Task ExtractSingleArchiveEntryAsync(string archive, string entryPath, string destination, CancellationToken ct)

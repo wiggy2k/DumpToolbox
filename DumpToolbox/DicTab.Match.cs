@@ -135,7 +135,7 @@ public partial class MainWindow
         string donorPath = DicDonorImageBox.Text?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(donorPath))
         {
-            await ShowMessageAsync("DumpToolbox — DIC", "Choose a donor ISO/BIN first.");
+            await ShowMessageAsync("DumpToolbox — DIC", "Choose a donor disc image first.");
             return;
         }
 
@@ -190,11 +190,14 @@ public partial class MainWindow
 
             AppendDicLog(
                 $"Donor identified as {donor.SectorSize}-byte sectors; volume '{donor.VolumeIdentifier}'; " +
-                $"primary ISO9660 records {donor.Files.Count:N0}.");
+                $"{(donor.HasUdf ? "UDF files" : "primary ISO9660 records")} {donor.Files.Count:N0}.");
             if (donor.HasJoliet)
                 AppendDicLog("Donor contains a supplementary/Joliet descriptor; its pathname tree is used only as validated name/casing evidence and is never copied as donor metadata.");
-            AppendDicLog(
-                $"Identity check: PVD {(donor.PvdMatches ? "MATCH" : "DIFFERS")}; volume label {(donor.VolumeIdentifierMatches ? "MATCH" : "DIFFERS")}.");
+            if (donor.HasUdf)
+                AppendDicLog("Donor is UDF-only; it has no ISO9660 PVD/Joliet identity to compare and is eligible only as a logical file-payload source.");
+            else
+                AppendDicLog(
+                    $"Identity check: PVD {(donor.PvdMatches ? "MATCH" : "DIFFERS")}; volume label {(donor.VolumeIdentifierMatches ? "MATCH" : "DIFFERS")}.");
 
             if (donor.SameDisc)
             {
@@ -206,7 +209,9 @@ public partial class MainWindow
             }
             else
             {
-                AppendDicLog("Donor is not an exact DIC PVD+volume-label match, so none of its filesystem metadata was copied. Its primary ISO9660 filesystem was searched as a source of candidate payloads; any unambiguously mapped Joliet pathnames are used only as name/casing evidence for those matched primary records.");
+                AppendDicLog(donor.HasUdf
+                    ? "The UDF filesystem was searched for unambiguous exact/projected pathname+size payload matches. No UDF metadata or raw-sector evidence was copied."
+                    : "Donor is not an exact DIC PVD+volume-label match, so none of its filesystem metadata was copied. Its primary ISO9660 filesystem was searched as a source of candidate payloads; any unambiguously mapped Joliet pathnames are used only as name/casing evidence for those matched primary records.");
             }
 
             AppendDicLog($"Donor scan added {added:N0} new persistent source match(es); donor-extracted payloads are cached under: {cacheRoot}");

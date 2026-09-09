@@ -386,7 +386,7 @@
           <Button x:Name="SkeletonSourceBrowseButton" Grid.Row="2" Grid.Column="2" Click="SkeletonSourceBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
 
           <TextBlock Grid.Row="3" Grid.Column="0" Text="Source ISO / BIN" FontWeight="SemiBold" VerticalAlignment="Center"/>
-          <TextBox x:Name="SkeletonSourceImageBox" Grid.Row="3" Grid.Column="1" Watermark="Optional ISO/BIN containing source files..."/>
+          <TextBox x:Name="SkeletonSourceImageBox" Grid.Row="3" Grid.Column="1" Watermark="Optional ISO/BIN/IMG containing source files..."/>
           <Button x:Name="SkeletonSourceImageBrowseButton" Grid.Row="3" Grid.Column="2" Click="SkeletonSourceImageBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
 
           <TextBlock Grid.Row="4" Grid.Column="0" Text="Resurrected output image" FontWeight="SemiBold" VerticalAlignment="Center"/>
@@ -404,7 +404,7 @@
         <Grid Grid.Row="2" RowDefinitions="Auto,Auto" RowSpacing="6">
           <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
             <Button x:Name="SkeletonScanButton" Grid.Column="0" Content="Scan source folder" Click="SkeletonScanButton_Click" IsEnabled="False"/>
-            <Button x:Name="SkeletonScanImageButton" Grid.Column="1" Content="Scan source ISO/BIN" Click="SkeletonScanImageButton_Click" IsEnabled="False"/>
+            <Button x:Name="SkeletonScanImageButton" Grid.Column="1" Content="Scan source image" Click="SkeletonScanImageButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonCheckSha1DbButton" Grid.Column="2" Content="Check SHA-1 DB" Click="SkeletonCheckSha1DbButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonResurrectButton" Grid.Column="3" Content="Resurrect" Click="SkeletonResurrectButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonCancelButton" Grid.Column="4" Content="Cancel" Click="SkeletonCancelButton_Click" IsEnabled="False"/>
@@ -815,11 +815,11 @@
         </TabItem>
       <TabItem x:Name="IsoExtractorTabItem" Header="ISO Extractor">
       <Grid Margin="12" RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="10">
-        <TextBlock Grid.Row="0" TextWrapping="Wrap" Text="Extract the primary ISO9660 filesystem directly from a 2048-byte ISO or 2352-byte BIN. Associated records and same-name records that mounted filesystems may hide are preserved in a DumpToolbox manifest-aware source folder for the DIC tab."/>
+        <TextBlock Grid.Row="0" TextWrapping="Wrap" Text="Extract ISO9660, Joliet, or UDF files directly from ISO/BIN/IMG disc images. ISO/Joliet record identity and UDF source paths are preserved in a DumpToolbox manifest-aware source folder for the DIC tab."/>
 
         <Grid Grid.Row="1" ColumnDefinitions="150,*,Auto" ColumnSpacing="8">
           <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Source ISO / BIN" FontWeight="SemiBold"/>
-          <TextBox x:Name="IsoExtractImagePathBox" Grid.Column="1" Watermark="Choose the source ISO/BIN image..."/>
+          <TextBox x:Name="IsoExtractImagePathBox" Grid.Column="1" Watermark="Choose the source ISO/BIN/IMG image..."/>
           <Button x:Name="IsoExtractImageBrowseButton" Grid.Column="2" Click="IsoExtractImageBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
         </Grid>
 

@@ -66,6 +66,7 @@ public sealed record DicDonorScanResult(
     int SectorSize,
     string VolumeIdentifier,
     bool HasJoliet,
+    bool HasUdf,
     bool PvdMatches,
     bool VolumeIdentifierMatches,
     bool SameDisc,
@@ -79,8 +80,9 @@ public sealed record DicDonorScanResult(
     IReadOnlyList<string> Warnings);
 
 /// <summary>
-/// Treats a cooked 2048-byte ISO or raw 2352-byte BIN as a donor filesystem for
-/// DiscImageCreator recovery. Primary ISO9660 records remain the physical reconstruction
+/// Treats a cooked 2048-byte ISO or raw 2352-byte BIN/IMG as a donor filesystem for
+/// DiscImageCreator recovery. ISO9660 and UDF-only files can supply logical payloads.
+/// Primary ISO9660 records remain the physical reconstruction
 /// authority. When a valid Joliet SVD is present, its namespace is also parsed so the ISO
 /// Extractor can expose user-visible Joliet names and record their correspondence to the
 /// primary records in the extraction manifest. A same-disc donor (exact PVD + volume label)
@@ -101,7 +103,7 @@ public sealed partial class DicDonorImageService
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(imagePath))
-            throw new ArgumentException("Choose a 2048-byte ISO or 2352-byte BIN image.", nameof(imagePath));
+            throw new ArgumentException("Choose a 2048-byte ISO or 2352-byte BIN/IMG image.", nameof(imagePath));
         if (string.IsNullOrWhiteSpace(outputDirectory))
             throw new ArgumentException("Choose an extraction folder.", nameof(outputDirectory));
 
@@ -113,8 +115,18 @@ public sealed partial class DicDonorImageService
         Directory.CreateDirectory(root);
         var warnings = new List<string>();
 
-        progress?.Report(new DicDonorProgress(0, 1, "Reading ISO9660/Joliet filesystem"));
-        await using var image = await DonorImageReader.OpenAsync(sourcePath, cancellationToken).ConfigureAwait(false);
+        progress?.Report(new DicDonorProgress(0, 1, "Reading disc filesystem"));
+        DonorImageReader image;
+        try
+        {
+            image = await DonorImageReader.OpenAsync(sourcePath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            return await ExtractUdfAsync(sourcePath, root, progress, cancellationToken).ConfigureAwait(false);
+        }
+
+        await using DonorImageReader ownedImage = image;
         DonorFilesystem filesystem = await ParseFilesystemAsync(image, cancellationToken).ConfigureAwait(false);
         if (filesystem.Pvd is null)
             throw new InvalidOperationException("The source image does not contain a readable ISO9660 Primary Volume Descriptor.");
@@ -216,7 +228,8 @@ public sealed partial class DicDonorImageService
             duplicateRecords,
             filesystem.HasJoliet,
             jolietByPrimary.Count,
-            warnings);
+            false,
+        warnings);
     }
 
     private static string BuildFilesystemExtractionPath(string isoPath)
@@ -326,7 +339,7 @@ public sealed partial class DicDonorImageService
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(donorImagePath))
-            throw new ArgumentException("Choose a 2048-byte ISO or 2352-byte BIN donor image.", nameof(donorImagePath));
+            throw new ArgumentException("Choose a 2048-byte ISO or 2352-byte BIN/IMG donor image.", nameof(donorImagePath));
 
         string donorPath = Path.GetFullPath(donorImagePath);
         if (!File.Exists(donorPath))
@@ -335,7 +348,17 @@ public sealed partial class DicDonorImageService
         var warnings = new List<string>();
         progress?.Report(new DicDonorProgress(0, 1, "Opening donor image"));
 
-        await using var donor = await DonorImageReader.OpenAsync(donorPath, cancellationToken).ConfigureAwait(false);
+        DonorImageReader donor;
+        try
+        {
+            donor = await DonorImageReader.OpenAsync(donorPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            return await MatchUdfAsync(inspection, donorPath, cacheRoot, progress, cancellationToken).ConfigureAwait(false);
+        }
+
+        await using DonorImageReader ownedDonor = donor;
         DonorFilesystem filesystem = await ParseFilesystemAsync(donor, cancellationToken).ConfigureAwait(false);
         if (filesystem.Pvd is null)
             throw new InvalidOperationException("The donor image does not contain a readable ISO9660 Primary Volume Descriptor.");
@@ -560,6 +583,7 @@ public sealed partial class DicDonorImageService
             donor.SectorSize,
             filesystem.VolumeIdentifier,
             filesystem.HasJoliet,
+            false,
             pvdMatches,
             volumeMatches,
             sameDisc,
@@ -570,7 +594,7 @@ public sealed partial class DicDonorImageService
             filesystem.Files,
             matches,
             BuildNonZeroJolietPaddingEvidence(filesystem.JolietFiles),
-            warnings);
+        warnings);
     }
 
     private static IReadOnlyList<DicJolietPaddingEvidence> BuildNonZeroJolietPaddingEvidence(

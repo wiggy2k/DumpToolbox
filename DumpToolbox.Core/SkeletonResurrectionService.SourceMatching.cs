@@ -343,7 +343,19 @@ public sealed partial class SkeletonResurrectionService
 
             string imagePath = Path.GetFullPath(sourceImagePath);
             await using SkeletonImageReader reader = await SkeletonImageReader.OpenAsync(imagePath, cancellationToken).ConfigureAwait(false);
-            IsoTree tree = await ReadIsoTreeAsync(reader, cancellationToken).ConfigureAwait(false);
+            IsoTree tree;
+            try
+            {
+                tree = await ReadIsoTreeAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or EndOfStreamException)
+            {
+                return await MatchUdfSourceImageAsync(
+                    inspection,
+                    imagePath,
+                    progress,
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             var expected = new Dictionary<string, List<(SkeletonContentEntry Entry, bool Xa)>>(StringComparer.OrdinalIgnoreCase);
             foreach (SkeletonContentEntry entry in inspection.Entries.Where(e => e.CanRestore && !e.IsEmpty))
@@ -713,9 +725,13 @@ public sealed partial class SkeletonResurrectionService
                 // identity in the manifest.  Never treat that directory as a loose source
                 // tree: resolve it through manifest evidence instead.
                 IsoExtractionManifestFile[] compatibleManifestRecords = extractorManifest.Files
-                    .Where(record => NormalizeDicRelativePath(record.IsoPath).Equals(expectedIsoPath, StringComparison.OrdinalIgnoreCase))
+                    .Where(record => NormalizeDicRelativePath(
+                            !string.IsNullOrWhiteSpace(record.UdfPath) ? record.UdfPath : record.IsoPath)
+                        .Equals(expectedIsoPath, StringComparison.OrdinalIgnoreCase))
                     .Where(record => record.DataLength == entry.DataLength)
-                    .Where(record => record.FileFlags == entry.IsoFileFlags)
+                    .Where(record => !extractorManifest.HasUdf
+                        ? record.FileFlags == entry.IsoFileFlags
+                        : (entry.IsoFileFlags & 0x7E) == 0)
                     .ToArray();
 
                 IsoExtractionManifestFile[] manifestMatches = extractorManifestMatches && entry.IsoRecordExtentLba is uint recordLba
@@ -744,7 +760,9 @@ public sealed partial class SkeletonResurrectionService
                             : string.Empty;
                         if (extractorManifestPayloadOnly)
                         {
-                            matchMethod = (entry.IsoFileFlags & 0x04) != 0
+                            matchMethod = extractorManifest.HasUdf
+                                ? "DumpToolbox ISO Extractor manifest — payload-only UDF file by path+size"
+                                : (entry.IsoFileFlags & 0x04) != 0
                                 ? "DumpToolbox ISO Extractor manifest — payload-only Associated record by path+size+flags"
                                 : "DumpToolbox ISO Extractor manifest — payload-only ISO record by path+size+flags";
                         }

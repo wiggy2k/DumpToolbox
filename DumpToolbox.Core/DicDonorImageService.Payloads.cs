@@ -64,7 +64,10 @@ public sealed partial class DicDonorImageService
                 aliases.Any(alias => SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
                     NormalizePath(donorJoliet.Path),
                     NormalizePath(entry.IsoOriginalPath ?? alias),
-                    namingProfile)))
+                    namingProfile) ||
+                    SkeletonResurrectionService.DonorJolietPathMatchesIsoCollisionAlias(
+                        NormalizePath(donorJoliet.Path),
+                        NormalizePath(entry.IsoOriginalPath ?? alias))))
             .ToArray();
 
         if (projected.Length > 1 && entry.RecordingTime is DateTimeOffset expectedTime)
@@ -87,7 +90,10 @@ public sealed partial class DicDonorImageService
                 SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
                     donorJolietPath,
                     NormalizePath(other.IsoOriginalPath ?? alias),
-                    namingProfile)));
+                    namingProfile) ||
+                SkeletonResurrectionService.DonorJolietPathMatchesIsoCollisionAlias(
+                    donorJolietPath,
+                    NormalizePath(other.IsoOriginalPath ?? alias))));
 
         return compatibleTargets == 1
             ? new DonorPayloadSelection(projected[0], "Donor Joliet pathname -> DIC primary ISO9660 projection + exact size")

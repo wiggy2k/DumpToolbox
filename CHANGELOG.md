@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.105 — 2026-09-09
+
+### Added
+
+- ISO Extractor now recognises UDF-only cooked ISO and raw BIN/IMG images, including write-once virtual partitions backed by a Virtual Allocation Table, and records UDF source paths in its DIC-compatible manifest.
+- SkeleTool can hash and restore logical files directly from UDF-only source images, and the SHA-1 catalogue can index and later materialize UDF files.
+- DIC donor scans can use UDF-only images as conservative pathname-and-size file-payload sources without treating UDF metadata as ISO9660, Joliet, or raw-sector evidence.
+- DIC can test exact donor footer sectors and all known deterministic CeQuadrat/WinOnCD end-of-volume footer layouts after a complete rebuild, promoting a candidate only when every available target hash matches.
+- Disc Evidence now validates CeQuadrat text and binary footer structure, self-LBA fields, checksums and zero-filled tails before classifying exact footer evidence.
+
+### Fixed
+
+- Joliet donor matching now recognises Nero's numbered Level-1 collision aliases while requiring compatible parent paths and filename shapes.
+- WinOnCD preparer identities are consistently recognised as CeQuadrat-family mastering evidence.
+
+### Tests
+
+- Added coverage for raw Mode 1/Mode 2 Form 1 UDF payload views, Form 2 rejection, UDF extraction-manifest compatibility, ISO/BIN/IMG SHA-1 catalogue discovery, Nero collision aliases, and deterministic CeQuadrat footer variants.
+
 ## 0.8.104 — 2026-09-06
 
 ### Added

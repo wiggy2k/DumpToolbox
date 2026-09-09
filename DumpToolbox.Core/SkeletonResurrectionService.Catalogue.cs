@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 
 namespace DumpToolbox.Core;
@@ -10,7 +11,15 @@ public sealed partial class SkeletonResurrectionService
     {
         string fullPath = Path.GetFullPath(imagePath);
         await using SkeletonImageReader reader = await SkeletonImageReader.OpenAsync(fullPath, cancellationToken).ConfigureAwait(false);
-        IsoTree tree = await ReadIsoTreeAsync(reader, cancellationToken).ConfigureAwait(false);
+        IsoTree tree;
+        try
+        {
+            tree = await ReadIsoTreeAsync(reader, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or EndOfStreamException)
+        {
+            return await ScanUdfImageContentsForCatalogueAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        }
         var files = new List<SkeletoolCatalogueImageFile>(tree.Files.Count);
 
         foreach (IsoFileExtent file in tree.Files)
@@ -34,5 +43,41 @@ public sealed partial class SkeletonResurrectionService
         }
 
         return new SkeletoolCatalogueImageContent(tree.VolumeIdentifier, reader.Kind, files, "ISO9660");
+    }
+
+    private static async Task<SkeletoolCatalogueImageContent> ScanUdfImageContentsForCatalogueAsync(
+        string imagePath,
+        CancellationToken cancellationToken)
+    {
+        using UdfImageReader udf = UdfImageReader.Open(imagePath);
+        var files = new List<SkeletoolCatalogueImageFile>(udf.Files.Count);
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
+        try
+        {
+            foreach (UdfImageFile file in udf.Files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using Stream source = udf.OpenFile(file.Path);
+                using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+                while (true)
+                {
+                    int read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
+                    if (read == 0)
+                        break;
+                    hash.AppendData(buffer, 0, read);
+                }
+                files.Add(new SkeletoolCatalogueImageFile(
+                    file.Path,
+                    file.Length,
+                    Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(),
+                    null));
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+
+        return new SkeletoolCatalogueImageContent(udf.VolumeIdentifier, null, files, "UDF");
     }
 }

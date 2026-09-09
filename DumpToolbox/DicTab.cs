@@ -69,11 +69,11 @@ public partial class MainWindow
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Choose 2048-byte ISO or 2352-byte BIN donor image",
+            Title = "Choose donor disc image",
             AllowMultiple = false,
             FileTypeFilter = new[]
             {
-                new FilePickerFileType("CD image") { Patterns = new[] { "*.iso", "*.bin", "*.img" } },
+                new FilePickerFileType("Disc image") { Patterns = new[] { "*.iso", "*.bin", "*.img" } },
                 FilePickerFileTypes.All
             }
         });

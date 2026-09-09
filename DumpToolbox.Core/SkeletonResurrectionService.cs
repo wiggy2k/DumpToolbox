@@ -166,7 +166,8 @@ public sealed record SkeletonSourceMatch(
     long? SourceLength = null,
     byte[]? GeneratedPayload = null,
     IReadOnlyList<SkeletonSourceImageExtent>? SourceImageExtents = null,
-    SkeletoolCatalogueMatchSource? CatalogueSource = null);
+    SkeletoolCatalogueMatchSource? CatalogueSource = null,
+    string? SourceFilesystem = null);
 
 public sealed record SkeletonSourceScanProgress(
     int FilesProcessed,

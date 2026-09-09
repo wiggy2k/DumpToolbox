@@ -43,4 +43,23 @@ public sealed class DicDonorJolietProvenanceTests
         Assert.Equal(method, DicDonorImageService.AddDonorJolietProvenance(method));
         Assert.True(DicLogImportService.MatchMethodTrustsRelativePath(method));
     }
+
+    [Theory]
+    [InlineData("DirectX/Apr2005_d3dx9_25_x64.cab", "DIRECTX/APR20052.CAB")]
+    [InlineData("DirectX/APR2007_XACT_x86.cab", "DIRECTX/APR20075.CAB")]
+    [InlineData("DirectX/Aug2009_D3DCompiler_42_x64.cab", "DIRECTX/AUG20010.CAB")]
+    public void NeroNumberedCollisionAliasesAreRecognised(string jolietPath, string isoPath)
+    {
+        Assert.True(DicDonorImageService.PayloadFileFlagsMatch(0, 0));
+        Assert.True(SkeletonResurrectionService.DonorJolietPathMatchesIsoCollisionAlias(jolietPath, isoPath));
+    }
+
+    [Theory]
+    [InlineData("Elsewhere/Apr2005_d3dx9_25_x64.cab", "DIRECTX/APR20052.CAB")]
+    [InlineData("DirectX/Apr2005_d3dx9_25_x64.cab", "DIRECTX/APR2005A.CAB")]
+    [InlineData("DirectX/Apr2005_d3dx9_25_x64.dll", "DIRECTX/APR20052.CAB")]
+    public void NeroCollisionAliasesRejectDifferentParentsOrShapes(string jolietPath, string isoPath)
+    {
+        Assert.False(SkeletonResurrectionService.DonorJolietPathMatchesIsoCollisionAlias(jolietPath, isoPath));
+    }
 }

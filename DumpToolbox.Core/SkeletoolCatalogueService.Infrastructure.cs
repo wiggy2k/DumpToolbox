@@ -89,9 +89,10 @@ public sealed partial class SkeletoolCatalogueService
     private static bool IsSha1(string? value) =>
         value is { Length: 40 } && value.All(Uri.IsHexDigit);
 
-    private static bool IsDirectImage(string path) =>
+    internal static bool IsDirectImage(string path) =>
         Path.GetExtension(path).Equals(".iso", StringComparison.OrdinalIgnoreCase) ||
-        Path.GetExtension(path).Equals(".bin", StringComparison.OrdinalIgnoreCase);
+        Path.GetExtension(path).Equals(".bin", StringComparison.OrdinalIgnoreCase) ||
+        Path.GetExtension(path).Equals(".img", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsArchive(string path) => ArchiveExtensions.Contains(Path.GetExtension(path));
 

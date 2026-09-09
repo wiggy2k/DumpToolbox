@@ -12,6 +12,7 @@
     <EmbeddedResource Include="CD32.TM" LogicalName="DumpToolbox.Core.CD32.TM" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="LTRData.DiscUtils.Udf" Version="1.0.88" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.12" />
     <PackageReference Include="SharpCompress" Version="0.50.4" />
   </ItemGroup>

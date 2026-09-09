@@ -5,13 +5,15 @@ namespace DumpToolbox.Core;
 
 public sealed class IsoExtractionManifest
 {
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
     public string Format { get; set; } = "DICRecovery ISO Extraction";
     public string SourceImageName { get; set; } = string.Empty;
     public int SourceSectorSize { get; set; }
+    public string SourceFilesystem { get; set; } = "ISO9660";
     public string VolumeIdentifier { get; set; } = string.Empty;
     public string PvdSha256 { get; set; } = string.Empty;
     public bool HasJoliet { get; set; }
+    public bool HasUdf { get; set; }
     public string VisibleNamespace { get; set; } = "ISO9660";
     public List<IsoExtractionManifestFile> Files { get; set; } = new();
 }
@@ -23,6 +25,9 @@ public sealed class IsoExtractionManifestFile
     // User-visible supplementary identity when an unambiguous Joliet record maps to
     // this primary record's physical payload. Null/empty means no proven mapping.
     public string? JolietPath { get; set; }
+    // UDF identity for UDF-only sources. IsoPath is retained as a payload-matching
+    // compatibility alias in v3 manifests, but is not primary ISO9660 evidence.
+    public string? UdfPath { get; set; }
     public string ExtractedRelativePath { get; set; } = string.Empty;
     public uint PrimaryDirectoryExtentLba { get; set; }
     public int PrimaryDirectoryRecordOffset { get; set; } = -1;
@@ -59,9 +64,9 @@ public static class IsoExtractionManifestService
         {
             string json = File.ReadAllText(path);
             IsoExtractionManifest? manifest = JsonSerializer.Deserialize<IsoExtractionManifest>(json);
-            // v1 manifests remain valid payload catalogues. v2 adds Joliet namespace and
-            // directory-record ordering evidence without changing primary identity fields.
-            return manifest is { Version: 1 or 2 } ? manifest : null;
+            // v1 manifests remain valid payload catalogues. v2 adds Joliet evidence;
+            // v3 adds UDF-only source identity without changing ISO/Joliet fields.
+            return manifest is { Version: 1 or 2 or 3 } ? manifest : null;
         }
         catch
         {
@@ -87,6 +92,11 @@ public static class IsoExtractionManifestService
     public static bool MatchesInspection(IsoExtractionManifest manifest, SkeletonInspectionResult inspection, out string reason)
     {
         reason = string.Empty;
+        if (manifest.HasUdf || manifest.SourceFilesystem.Equals("UDF", StringComparison.OrdinalIgnoreCase))
+        {
+            reason = "extractor source is UDF-only and has no ISO9660 PVD identity";
+            return false;
+        }
         if (!manifest.VolumeIdentifier.Equals(inspection.VolumeIdentifier, StringComparison.OrdinalIgnoreCase))
         {
             reason = $"volume identifier differs (extractor '{manifest.VolumeIdentifier}', DIC '{inspection.VolumeIdentifier}')";
@@ -185,4 +195,5 @@ public sealed record IsoExtractionResult(
     int DuplicateRecordsPreserved,
     bool HasJoliet,
     int JolietMappedRecords,
+    bool HasUdf,
     IReadOnlyList<string> Warnings);

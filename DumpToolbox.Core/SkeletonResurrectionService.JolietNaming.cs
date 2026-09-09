@@ -356,6 +356,9 @@ public sealed partial class SkeletonResurrectionService
     internal static bool DonorJolietPathProjectsToIsoPath(string jolietRelativePath, string isoRelativePath, JolietNamingProfile? profile)
         => JolietPathProjectsToIsoPath(jolietRelativePath, isoRelativePath, profile);
 
+    internal static bool DonorJolietPathMatchesIsoCollisionAlias(string jolietRelativePath, string isoRelativePath)
+        => JolietPathMatchesIsoCollisionAlias(jolietRelativePath, isoRelativePath);
+
     internal static bool EvidenceJolietPathProjectsToIsoPath(
         string jolietRelativePath,
         string isoRelativePath,
@@ -427,6 +430,27 @@ public sealed partial class SkeletonResurrectionService
             return false;
         if (projectedStem.Equals(targetStem, StringComparison.OrdinalIgnoreCase))
             return false; // stronger ordinary projection handles the non-collision member
+
+        // Nero's Level-1 collision discriminator consumes as many trailing stem
+        // characters as its decimal width requires. Thus APR2007_ -> APR20072 for
+        // member 2, while AUG2009_ -> AUG20010 for member 10. Test every possible
+        // trailing decimal suffix and require the retained prefix to be exactly the
+        // corresponding prefix of the ordinary eight-character projection. Exact
+        // size and reverse uniqueness remain mandatory at the caller.
+        if (projectedStem.Length == 8 && targetStem.Length == 8)
+        {
+            int firstTrailingDigit = targetStem.Length;
+            while (firstTrailingDigit > 0 && char.IsDigit(targetStem[firstTrailingDigit - 1]))
+                firstTrailingDigit--;
+            for (int suffixStart = targetStem.Length - 1; suffixStart >= firstTrailingDigit; suffixStart--)
+            {
+                string suffix = targetStem[suffixStart..];
+                if (!int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out int ordinal) || ordinal < 2)
+                    continue;
+                if (targetStem[..suffixStart].Equals(projectedStem[..suffixStart], StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
 
         int commonPrefixLength = 0;
         int comparableLength = Math.Min(projectedStem.Length, targetStem.Length);

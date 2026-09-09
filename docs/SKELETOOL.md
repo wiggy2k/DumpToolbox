@@ -6,11 +6,13 @@ SkeleTool is an independent implementation of the Redumper skeleton/hash restora
 
 1. Select a Redumper `.skeleton`; the matching `.hash` is suggested automatically.
 2. Load the pair and inspect the filesystem tree.
-3. Scan a source folder or source ISO/BIN, and optionally query the SHA-1 catalogue.
+3. Scan a source folder or source ISO/BIN/IMG, including UDF-only images, and optionally query the SHA-1 catalogue.
 4. Review found, missing, special and XA/Form 2 entries.
 5. Resurrect to a new output image.
 
 Source filenames do not need to match the image: normal files are matched by SHA-1 and logical size. `SYSTEM_AREA`, `GAP_#######`, and alternate `.XA` payload hashes are recognised.
+
+UDF source files are hashed and streamed as logical file contents. UDF cannot supply an alternate raw 2324-byte Mode 2 Form 2 `.XA` payload, because that physical-sector information is outside the filesystem file stream.
 
 ## Sector handling
 
@@ -23,9 +25,10 @@ The source skeleton is never modified. Output is written through a partial file 
 
 ## SHA-1 catalogue
 
-Collection roots are managed under **Settings → SHA-1 Database**. Direct ISO/BIN images and supported archives are indexed in `skeletool_sha1_catalogue.sqlite`.
+Collection roots are managed under **Settings → SHA-1 Database**. Direct ISO/BIN/IMG images and supported archives are indexed in `skeletool_sha1_catalogue.sqlite`.
 
 - CUE geometry controls referenced BIN tracks; audio tracks are not offered to the filesystem scanner.
+- ISO9660 and UDF-only data images are indexed directly. Selected UDF catalogue matches are materialized only when resurrection starts.
 - Filesystem hashes and image locations are stored compactly; archive payloads are materialized only when a selected match is actually needed for resurrection.
 - Direct local sources have priority over catalogue images, which have priority over archive-backed matches.
 - Missing historical sources remain recorded but cannot satisfy a rebuild.

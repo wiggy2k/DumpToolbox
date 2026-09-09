@@ -8,7 +8,6 @@ public sealed partial class DiscEvidenceService
 {
     private const int LogicalSectorSize = 2048;
     private static readonly byte[] CeQuadratLinkSignature = Encoding.ASCII.GetBytes("CeQuadrat Joliet directory link table");
-    private static readonly byte[] CeQuadratFormatterSignature = Encoding.ASCII.GetBytes("CeQuadrat ISO 9660 formatter information block");
 
     private sealed record DiscMasteringObservation(
         string Kind,
@@ -85,16 +84,25 @@ public sealed partial class DiscEvidenceService
         foreach (long lba in new[] { volumeSectors - 2, volumeSectors - 1 }.Where(value => value >= 0).Distinct())
         {
             byte[] payload = await reader.ReadAsync(lba, cancellationToken).ConfigureAwait(false);
-            if (payload.AsSpan().StartsWith(CeQuadratFormatterSignature))
+            if (CeQuadratFooterCodec.IsExactTextPayload(payload, lba))
             {
                 result.Add(CreateObservation("CEQUADRAT_TEXT_FORMATTER", "UNCLAIMED", lba, lba + 1, payload,
-                    $"relative_to_volume_end={lba - volumeSectors}"));
+                    $"relative_to_volume_end={lba - volumeSectors};variant=deterministic_text;template_exact=true;lba_fields_valid=true;marker_valid=true;zero_fill_valid=true"));
                 AddRange(occupied, lba, 1, volumeSectors);
             }
-            else if (LooksLikeCeQuadratBinaryFooter(payload, lba))
+            else if (payload.AsSpan().StartsWith(CeQuadratFooterCodec.TextSignature))
             {
-                result.Add(CreateObservation("CEQUADRAT_BINARY_FOOTER", "UNCLAIMED", lba, lba + 1, payload,
-                    $"relative_to_volume_end={lba - volumeSectors};candidate_only=true"));
+                result.Add(CreateObservation("CEQUADRAT_TEXT_FORMATTER_CANDIDATE", "UNCLAIMED", lba, lba + 1, payload,
+                    $"relative_to_volume_end={lba - volumeSectors};template_exact=false;candidate_only=true"));
+                AddRange(occupied, lba, 1, volumeSectors);
+            }
+            else if (CeQuadratFooterCodec.TryClassifyExactBinaryPayload(payload, lba, out CeQuadratBinaryFooterVariant variant))
+            {
+                bool masteringIdentityMatches = IsCeQuadratOrWinOnCdPreparer(primary.DataPreparerId);
+                string kind = masteringIdentityMatches ? "CEQUADRAT_BINARY_FOOTER" : "BINARY_VOLUME_FOOTER_CANDIDATE";
+                result.Add(CreateObservation(kind, "UNCLAIMED", lba, lba + 1, payload,
+                    $"relative_to_volume_end={lba - volumeSectors};variant={variant.ToString().ToLowerInvariant()};template_exact=true;checksum_valid=true;self_lba_valid=true;zero_tail_valid=true" +
+                    (masteringIdentityMatches ? string.Empty : ";candidate_only=true")));
                 AddRange(occupied, lba, 1, volumeSectors);
             }
         }
@@ -159,7 +167,7 @@ public sealed partial class DiscEvidenceService
                 continue;
             nonZeroSectors++;
             nonZeroBytes += count;
-            string kind = ClassifyUnexpectedSector(payload, region);
+            string kind = ClassifyUnexpectedSector(payload, region, lba);
             result.Add(CreateObservation(kind, region, lba, lba + 1, payload, "candidate_only=true"));
         }
         result.Add(new DiscMasteringObservation(
@@ -266,12 +274,14 @@ public sealed partial class DiscEvidenceService
         DiscFilesystemRecordEvidence record)
         => (record.Namespace, record.DirectoryExtent, record.RecordOffset, record.RecordIndex);
 
-    private static string ClassifyUnexpectedSector(ReadOnlySpan<byte> payload, string region)
+    private static string ClassifyUnexpectedSector(ReadOnlySpan<byte> payload, string region, long lba)
     {
         if (payload.StartsWith(CeQuadratLinkSignature))
             return "CEQUADRAT_JOLIET_LINK_TABLE";
-        if (payload.StartsWith(CeQuadratFormatterSignature))
+        if (CeQuadratFooterCodec.IsExactTextPayload(payload, lba))
             return "CEQUADRAT_TEXT_FORMATTER";
+        if (payload.StartsWith(CeQuadratFooterCodec.TextSignature))
+            return "CEQUADRAT_TEXT_FORMATTER_CANDIDATE";
         return region switch
         {
             "SYSTEM_AREA" => "NONZERO_SYSTEM_AREA",
@@ -280,11 +290,10 @@ public sealed partial class DiscEvidenceService
         };
     }
 
-    private static bool LooksLikeCeQuadratBinaryFooter(ReadOnlySpan<byte> payload, long lba)
-        => payload.Length >= 16 &&
-           payload[0] == 0x02 && payload[1] == 0x00 && payload[2] == 0x02 && payload[3] == 0x00 &&
-           payload[10] == 0xF0 && payload[11] == 0x01 &&
-           BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(12, 4)) == lba;
+    private static bool IsCeQuadratOrWinOnCdPreparer(string value)
+        => value.Contains("CEQUADRAT", StringComparison.OrdinalIgnoreCase) ||
+           value.Contains("CEQUDRAT", StringComparison.OrdinalIgnoreCase) ||
+           value.Contains("WINONCD", StringComparison.OrdinalIgnoreCase);
 
     private static DiscMasteringObservation CreateObservation(
         string kind, string region, long start, long end, byte[] bytes, string details)

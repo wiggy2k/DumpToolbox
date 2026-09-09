@@ -141,7 +141,8 @@ public sealed partial class DicDonorImageService
         string sourcePath,
         string destinationPath,
         IProgress<DicDonorProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string message = "Creating temporary donor-padding candidate")
     {
         const int bufferSize = 4 * 1024 * 1024;
         long total = new FileInfo(sourcePath).Length;
@@ -168,7 +169,7 @@ public sealed partial class DicDonorImageService
         {
             await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             copied += read;
-            progress?.Report(new DicDonorProgress(copied, total, "Creating temporary donor-padding candidate"));
+            progress?.Report(new DicDonorProgress(copied, total, message));
         }
         await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -247,4 +248,3 @@ public sealed partial class DicDonorImageService
         }
     }
 }
-

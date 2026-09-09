@@ -1075,7 +1075,8 @@ public sealed partial class DicLogImportService
 
     private static bool IsCeQuadratPreparer(string value)
         => value.Contains("CEQUADRAT", StringComparison.OrdinalIgnoreCase) ||
-           value.Contains("CEQUDRAT", StringComparison.OrdinalIgnoreCase);
+           value.Contains("CEQUDRAT", StringComparison.OrdinalIgnoreCase) ||
+           value.Contains("WINONCD", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyDictionary<string, PrimaryDirectoryMetadata> ReadPrimaryDirectoryMetadata(
         SkeletonInspectionResult inspection,

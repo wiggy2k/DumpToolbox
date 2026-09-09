@@ -151,6 +151,12 @@ public partial class MainWindow
                 }
             }
 
+            rebuiltHashesMatch = await TryTestDicCeQuadratFooterCandidatesAsync(
+                inspection,
+                result,
+                rebuiltHashesMatch,
+                _dicCts.Token);
+
             await TryTestDicDonorJolietPaddingAsync(
                 inspection,
                 result,
@@ -163,7 +169,7 @@ public partial class MainWindow
         catch (OperationCanceledException)
         {
             AppendDicLog(rebuildCompleted
-                ? "JOLIET CANDIDATE: verification cancelled. The temporary candidate was removed and the completed rebuilt BIN was left unchanged."
+                ? "DIC candidate verification cancelled. Temporary candidates were removed and the completed rebuilt BIN was left unchanged."
                 : "DIC rebuild cancelled. Partial output removed; saved recovery state was not advanced.");
             DicProgressText.Text = "Cancelled";
             SetWindowStatus();

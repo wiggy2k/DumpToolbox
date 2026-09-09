@@ -10,18 +10,18 @@ public partial class MainWindow
 
     private void InitializeIsoExtractorTab()
     {
-        AppendIsoExtractorLog("Extracts the user-visible Joliet tree when present while retaining exact primary ISO9660 record identity, associated/duplicate payloads and both namespace mappings in the DIC-aware manifest.");
+        AppendIsoExtractorLog("Extracts ISO9660, Joliet, and UDF-only disc images. ISO/Joliet record identity and UDF source paths are retained in the DIC-aware manifest.");
     }
 
     private async void IsoExtractImageBrowseButton_Click(object? sender, RoutedEventArgs e)
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Choose ISO/BIN source image",
+            Title = "Choose source disc image",
             AllowMultiple = false,
             FileTypeFilter = new[]
             {
-                new FilePickerFileType("CD image") { Patterns = new[] { "*.iso", "*.bin", "*.img" } },
+                new FilePickerFileType("Disc image") { Patterns = new[] { "*.iso", "*.bin", "*.img" } },
                 FilePickerFileTypes.All
             }
         });
@@ -86,10 +86,12 @@ public partial class MainWindow
 
             IsoExtractProgressBar.Value = 100;
             IsoExtractProgressText.Text = "Complete";
-            AppendIsoExtractorLog($"Extracted {result.FilesExtracted:N0} ISO file record(s).");
-            AppendIsoExtractorLog(result.HasJoliet
-                ? $"Visible namespace: Joliet ({result.JolietMappedRecords:N0} primary record(s) mapped explicitly)."
-                : "Visible namespace: primary ISO9660 (no Joliet SVD detected).");
+            AppendIsoExtractorLog($"Extracted {result.FilesExtracted:N0} filesystem file(s)/record(s).");
+            AppendIsoExtractorLog(result.HasUdf
+                ? "Visible namespace: UDF (the image has no ISO9660/Joliet descriptor tree)."
+                : result.HasJoliet
+                    ? $"Visible namespace: Joliet ({result.JolietMappedRecords:N0} primary record(s) mapped explicitly)."
+                    : "Visible namespace: primary ISO9660 (no Joliet SVD detected).");
             AppendIsoExtractorLog($"Associated records preserved: {result.AssociatedFilesExtracted:N0}.");
             AppendIsoExtractorLog($"Additional colliding records preserved: {result.DuplicateRecordsPreserved:N0}.");
             AppendIsoExtractorLog($"Manifest: {result.ManifestPath}");

@@ -16,7 +16,7 @@ Choose any companion log and DumpToolbox discovers the related files.
 ## Recovery workflow
 
 1. Load the log set and create the synthetic raw skeleton.
-2. Select one or more ordinary source folders, ISO Extractor outputs, or donor images.
+2. Select one or more ordinary source folders, ISO Extractor outputs, or ISO9660/Joliet/UDF donor images.
 3. Match sources and review mandatory/optional exactness requirements.
 4. Rebuild. Matches and cumulative work are saved in `.dumptoolbox_dicstate.json` beside the logs.
 5. Verify against supplied target hashes whenever available.
@@ -29,12 +29,13 @@ The logged primary ISO9660 structure remains authoritative. Source matching requ
 - validated Joliet-to-primary projection when it is unique;
 - ISO Extractor manifest identity for associated or colliding records;
 - donor primary/Joliet evidence only under its stricter donor rules.
+- UDF-only extractor/donor files by an unambiguous exact or conservatively projected pathname plus exact logical size.
 
 The matcher does not accept size-only or arbitrary filename guesses. Validated user-visible names can rebuild otherwise missing Joliet directories and path tables without replacing primary extents or metadata.
 
 ## Donors and exactness
 
-A cooked ISO or raw BIN/IMG can supply payloads. Same-disc primary metadata is copied only when PVD identity and volume label match. Mandatory donor regions include non-empty Associated File payloads, Extended Attribute Records, and ambiguous colliding non-associated records that a mounted filesystem cannot prove.
+A cooked ISO or raw BIN/IMG can supply payloads. Same-disc primary metadata is copied only when PVD identity and volume label match. A UDF-only image has no comparable ISO9660 PVD, so it is always payload-only and never supplies filesystem metadata, Joliet identity, or raw-sector exactness. Mandatory donor regions include non-empty Associated File payloads, Extended Attribute Records, and ambiguous colliding non-associated records that a mounted filesystem cannot prove.
 
 Optional exactness regions—such as unproven system area, file-tail slack or missing metadata—remain zero-filled in a best-effort rebuild unless an exact same-disc donor supplies them. Raw-only anomalies require a 2352-byte donor; a cooked donor cannot provide Mode 2 Form 2 payload bytes or malformed raw framing.
 

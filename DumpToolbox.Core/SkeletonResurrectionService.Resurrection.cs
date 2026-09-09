@@ -753,6 +753,13 @@ public sealed partial class SkeletonResurrectionService
         if (match.GeneratedPayload is not null)
             return new MemoryStream(match.GeneratedPayload, writable: false);
 
+        if (match.SourceFilesystem?.Equals("UDF", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            string path = match.SourceRelativePath
+                ?? throw new InvalidOperationException("UDF-backed Skeletool source is missing its filesystem path.");
+            return UdfImageReader.OpenFile(match.SourcePath, path);
+        }
+
         if (match.SourceImageLba is null)
             return OpenRead(match.SourcePath, CopyBufferSize, FileOptions.SequentialScan);
 

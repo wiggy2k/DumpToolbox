@@ -60,11 +60,11 @@ public partial class MainWindow : Window
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Choose source ISO or BIN image",
+            Title = "Choose source disc image",
             AllowMultiple = false,
             FileTypeFilter = new[]
             {
-                new FilePickerFileType("Disc images") { Patterns = new[] { "*.iso", "*.bin" } },
+                new FilePickerFileType("Disc images") { Patterns = new[] { "*.iso", "*.bin", "*.img" } },
                 FilePickerFileTypes.All
             }
         });
@@ -302,7 +302,7 @@ public partial class MainWindow : Window
             string image = SkeletonSourceImageBox.Text?.Trim() ?? string.Empty;
             SkeletonProgressBar.Value = 0;
             SkeletonProgressText.Text = "Scanning image...";
-            AppendSkeletonLog($"Scanning source ISO/BIN: {image}");
+            AppendSkeletonLog($"Scanning source disc image: {image}");
             _skeletonCts = new CancellationTokenSource();
             SetSkeletonRunning(true);
             var progress = new Progress<SkeletonSourceScanProgress>(p =>

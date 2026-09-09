@@ -1300,7 +1300,7 @@ public sealed partial class DicLogImportService
             .Any(lba => metadata.TryGetValue(lba, out byte[]? payload) && payload.Any(value => value != 0));
         warnings.Add(preserved
             ? "Preserved exact CeQuadrat/WinOnCD end-of-volume private metadata supplied by the logs or donor evidence."
-            : "CeQuadrat/WinOnCD mastering was identified, but its end-of-volume private footer was not synthesized: the PVD signature does not determine whether this disc used no footer, a text block at VSS-1, or the text-plus-binary layout at VSS-2/VSS-1. Exact logged or same-disc donor metadata is required.");
+            : "CeQuadrat/WinOnCD mastering was identified. Its end-of-volume private footer is intentionally left empty in the initial rebuild because the PVD signature does not select a layout. After a complete rebuild, DumpToolbox will check exact donor footer sectors when available and then test each known deterministic layout against the target MD5/SHA1; only a full target-hash match is promoted.");
     }
 
     private static void TrySynthesizeCeQuadratJolietDirectoryLinkTable(
