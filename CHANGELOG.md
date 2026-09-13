@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.8.107 — 2026-09-13
 
 ### Added
 
+- Disc-evidence-backed EOF rules now distinguish directly proven residue from `HashTrial` candidates, add FinalBuilder's 32-sector mode, correct Easy CD Creator 5.3 (010), disable the disproven QuickTopix 2.20 rule, and retain uncertain Easy CD/Roxio/CD-Producer observations only for whole-image hash trials.
+- Joliet naming profiles can now select `;1` versus unversioned file identifiers, directory-record ordering, path-table ordering, opaque `~x` aliases, and `_hhhh` hexadecimal ordinal aliases for the mastering families that exhibit them.
+- DIC now offers an opt-in **Force matched Joliet names** mode that accepts saved source-relative pathnames without ISO9660 projection/collision revalidation while retaining payload, size, extent, and donor checks.
 - Disc Evidence now records UDF anchors, main and reserve descriptor sequences, partition maps, descriptor tag checksum/CRC status, required-zero violations, exact raw structure bytes and fingerprints, and complete current/previous Virtual Allocation Table generations in dedicated database tables and CSV exports.
 - UDF VAT loading now supports immediate tables and recorded short, long, or extended allocation descriptors, including tables split across non-contiguous extents.
 
@@ -14,6 +17,8 @@
 
 ### Tests
 
+- Added coverage for evidence-backed EOF rule safety, mastering-specific Joliet version/order policy, opaque tilde aliases, and hexadecimal ordinal aliases.
+- Added regression coverage for forced Joliet pathname acceptance of numbered ISO9660 collision aliases.
 - Added regression coverage for the VAT ICB File Type offset, non-contiguous short allocation descriptors, UDF partition-map evidence and previous VAT generations.
 
 ## 0.8.106 — 2026-09-09

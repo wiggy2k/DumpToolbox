@@ -32,4 +32,38 @@ public sealed class JolietPathMatchingTests
         Assert.False(SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(jolietPath, primaryPath));
         Assert.False(DicLogImportService.SourceJolietPathMatchesPrimaryEntry(jolietPath, primaryPath));
     }
+
+    [Fact]
+    public void OpaqueTildeAliasesRequireExplicitMasteringProfile()
+    {
+        const string jolietPath = "DirectX/Apr2006_xinput_x86.cab";
+        const string primaryPath = "DIRECTX/AP22B5~1.CAB";
+        var profile = ProfileWith("OpaqueTildeAlias");
+
+        Assert.False(SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(jolietPath, primaryPath));
+        Assert.True(SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(jolietPath, primaryPath, profile));
+        Assert.False(SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
+            jolietPath, "DIRECTX/AP22B5~1.EXE", profile));
+    }
+
+    [Theory]
+    [InlineData("Data/Ubisoft Game.exe", "DATA/UBI_0001.EXE")]
+    [InlineData("Data/Ubisoft Game.exe", "DATA/UBI_000A.EXE")]
+    public void HexOrdinalAliasesRequireExplicitMasteringProfile(string jolietPath, string primaryPath)
+    {
+        var profile = ProfileWith("HexOrdinalAlias");
+
+        Assert.False(SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(jolietPath, primaryPath));
+        Assert.True(SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(jolietPath, primaryPath, profile));
+        Assert.False(SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
+            "Data/Different Game.exe", primaryPath, profile));
+    }
+
+    private static JolietNamingProfile ProfileWith(params string[] methods) => new(
+        "Test",
+        "Test",
+        "TEST",
+        string.Empty,
+        "*",
+        methods.ToHashSet(StringComparer.OrdinalIgnoreCase));
 }

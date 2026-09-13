@@ -44,6 +44,47 @@ public sealed class DicDonorJolietProvenanceTests
         Assert.True(DicLogImportService.MatchMethodTrustsRelativePath(method));
     }
 
+    [Fact]
+    public void NumberedCollisionAliasFailsOrdinaryRevalidationUntilForced()
+    {
+        const string method = "Donor Joliet pathname -> DIC primary ISO9660 projection + exact size";
+        const string jolietPath = "DirectX/Apr2005_d3dx9_25_x86.cab";
+        const string isoPath = "DIRECTX/APR20052.CAB";
+
+        Assert.False(DicLogImportService.MatchedJolietPathCanBeUsed(
+            jolietPath,
+            isoPath,
+            method,
+            forceMatchedJolietNames: false));
+        Assert.True(DicLogImportService.MatchedJolietPathCanBeUsed(
+            jolietPath,
+            isoPath,
+            method,
+            forceMatchedJolietNames: true));
+    }
+
+    [Fact]
+    public void OrdinaryProjectedJolietNameStillPassesRevalidation()
+    {
+        const string method = "Donor Joliet pathname -> DIC primary ISO9660 projection + exact size";
+
+        Assert.True(DicLogImportService.MatchedJolietPathCanBeUsed(
+            "DirectX/Apr2005_d3dx9_25_x64.cab",
+            "DIRECTX/APR2005_.CAB",
+            method,
+            forceMatchedJolietNames: false));
+    }
+
+    [Fact]
+    public void ForceStillRequiresASavedSourceRelativePath()
+    {
+        Assert.False(DicLogImportService.MatchedJolietPathCanBeUsed(
+            string.Empty,
+            "DIRECTX/APR20052.CAB",
+            "Saved DIC match",
+            forceMatchedJolietNames: true));
+    }
+
     [Theory]
     [InlineData("DirectX/Apr2005_d3dx9_25_x64.cab", "DIRECTX/APR20052.CAB")]
     [InlineData("DirectX/APR2007_XACT_x86.cab", "DIRECTX/APR20075.CAB")]

@@ -19,7 +19,7 @@ public sealed class MasteringProfileDetectorTests
 
         Assert.Equal((byte)0x2D, profile.SupplementaryRootXaFileNumber);
         Assert.Equal(JolietRecordOrdering.PreservePrimaryRecordOrder, profile.JolietRecordOrdering);
-        Assert.Equal(JolietPathTableOrdering.CaseSensitiveUcs2Identifier, profile.JolietPathTableOrdering);
+        Assert.Equal(JolietPathTableOrdering.PreservePrimaryDirectoryOrder, profile.JolietPathTableOrdering);
         Assert.Contains("Easy CD Creator", profile.Name, StringComparison.Ordinal);
     }
 

@@ -78,6 +78,7 @@ public partial class MainWindow
                 inspection,
                 _dicMatches,
                 folder,
+                DicForceMatchedJolietNamesCheckBox.IsChecked == true,
                 _dicCts.Token);
             if (jolietUpdate.Updated)
                 AppendDicLog($"Joliet metadata updated from matched source names: {jolietUpdate.SourcePathsUsed:N0} source pathname(s), {jolietUpdate.DicLongAliasesUsed:N0} DIC long-name alias(es).");
@@ -179,6 +180,7 @@ public partial class MainWindow
                 _dicInspection,
                 _dicMatches,
                 _dicLogs.Directory,
+                DicForceMatchedJolietNamesCheckBox.IsChecked == true,
                 _dicCts.Token);
             if (jolietUpdate.Updated)
                 AppendDicLog($"Joliet metadata updated from donor-image pathname evidence: {jolietUpdate.SourcePathsUsed:N0} source pathname(s), {jolietUpdate.DicLongAliasesUsed:N0} DIC long-name alias(es).");

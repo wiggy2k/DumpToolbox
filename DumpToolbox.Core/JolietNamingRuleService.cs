@@ -1,7 +1,15 @@
 using System.Reflection;
 using System.Text;
+using DumpToolbox.Core.Mastering;
 
 namespace DumpToolbox.Core;
+
+public enum JolietFileVersioning
+{
+    Unspecified,
+    Version1,
+    None
+}
 
 public sealed record JolietNamingProfile(
     string Section,
@@ -9,7 +17,12 @@ public sealed record JolietNamingProfile(
     string ApplicationContains,
     string DataPreparerContains,
     string SystemIdMatch,
-    IReadOnlySet<string> Methods);
+    IReadOnlySet<string> Methods,
+    JolietFileVersioning FileVersioning = JolietFileVersioning.Unspecified,
+    JolietRecordOrdering? RecordOrdering = null,
+    JolietPathTableOrdering? PathTableOrdering = null,
+    string IdentityExcludes = "",
+    string IdentityContains = "");
 
 public sealed record JolietNamingRuleSet(
     string FilePath,
@@ -100,9 +113,19 @@ public static class JolietNamingRuleService
             string prep=Get(v,"DataPreparerContains");
             string sys=Get(v,"SystemIdMatch","*");
             string name=Get(v,"Name",pair.Key);
+            string identityExcludes=Get(v,"IdentityExcludes");
+            string identityContains=Get(v,"IdentityContains");
             var methods=Get(v,"Methods").Split(',', StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (string.IsNullOrWhiteSpace(app) && string.IsNullOrWhiteSpace(prep) && (string.IsNullOrWhiteSpace(sys) || sys=="*"))
+            JolietFileVersioning fileVersioning = ParseEnum(
+                v, "FileVersioning", JolietFileVersioning.Unspecified, pair.Key, warnings);
+            JolietRecordOrdering? recordOrdering = ParseOptionalEnum<JolietRecordOrdering>(
+                v, "RecordOrdering", pair.Key, warnings);
+            JolietPathTableOrdering? pathTableOrdering = ParseOptionalEnum<JolietPathTableOrdering>(
+                v, "PathTableOrdering", pair.Key, warnings);
+            if (string.IsNullOrWhiteSpace(app) && string.IsNullOrWhiteSpace(prep) &&
+                string.IsNullOrWhiteSpace(identityContains) &&
+                (string.IsNullOrWhiteSpace(sys) || sys=="*"))
             {
                 warnings.Add($"[{pair.Key}] ignored: it has no mastering signature selector.");
                 continue;
@@ -112,7 +135,7 @@ public static class JolietNamingRuleService
                 warnings.Add($"[{pair.Key}] ignored: Methods is empty.");
                 continue;
             }
-            profiles.Add(new(pair.Key,name,app,prep,sys,methods));
+            profiles.Add(new(pair.Key,name,app,prep,sys,methods,fileVersioning,recordOrdering,pathTableOrdering,identityExcludes,identityContains));
         }
         return new JolietNamingRuleSet(ExternalFilePath,enabled,profiles,warnings);
     }
@@ -133,8 +156,23 @@ public static class JolietNamingRuleService
     public static bool ProfileAllows(JolietNamingProfile? profile, string method)
         => profile is null || profile.Methods.Contains(method) || profile.Methods.Contains("All");
 
+    public static bool ProfileExplicitlyAllows(JolietNamingProfile? profile, string method)
+        => profile is not null && (profile.Methods.Contains(method) || profile.Methods.Contains("All"));
+
     private static bool Matches(JolietNamingProfile p, IsoMasteringIdentity i)
     {
+        string[] exclusions = p.IdentityExcludes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (exclusions.Any(value =>
+                i.SystemId.Contains(value, StringComparison.OrdinalIgnoreCase) ||
+                i.ApplicationId.Contains(value, StringComparison.OrdinalIgnoreCase) ||
+                i.DataPreparerId.Contains(value, StringComparison.OrdinalIgnoreCase)))
+            return false;
+        string[] identitySelectors = p.IdentityContains.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (identitySelectors.Length > 0 && !identitySelectors.Any(value =>
+                i.SystemId.Contains(value, StringComparison.OrdinalIgnoreCase) ||
+                i.ApplicationId.Contains(value, StringComparison.OrdinalIgnoreCase) ||
+                i.DataPreparerId.Contains(value, StringComparison.OrdinalIgnoreCase)))
+            return false;
         if (!string.IsNullOrWhiteSpace(p.ApplicationContains) && !i.ApplicationId.Contains(p.ApplicationContains,StringComparison.OrdinalIgnoreCase)) return false;
         if (!string.IsNullOrWhiteSpace(p.DataPreparerContains) && !i.DataPreparerId.Contains(p.DataPreparerContains,StringComparison.OrdinalIgnoreCase)) return false;
         string sys=p.SystemIdMatch.Trim();
@@ -167,4 +205,37 @@ public static class JolietNamingRuleService
 
     private static string Get(Dictionary<string,string>? v,string k,string d="") => v is not null && v.TryGetValue(k,out string? x)?x.Trim():d;
     private static bool GetBool(Dictionary<string,string>? v,string k,bool d) => bool.TryParse(Get(v,k),out bool b)?b:d;
+
+    private static T ParseEnum<T>(
+        Dictionary<string, string> values,
+        string key,
+        T defaultValue,
+        string section,
+        List<string> warnings)
+        where T : struct, Enum
+    {
+        string text = Get(values, key);
+        if (text.Length == 0)
+            return defaultValue;
+        if (Enum.TryParse(text, ignoreCase: true, out T value) && Enum.IsDefined(value))
+            return value;
+        warnings.Add($"[{section}] {key}='{text}' is invalid and was ignored.");
+        return defaultValue;
+    }
+
+    private static T? ParseOptionalEnum<T>(
+        Dictionary<string, string> values,
+        string key,
+        string section,
+        List<string> warnings)
+        where T : struct, Enum
+    {
+        string text = Get(values, key);
+        if (text.Length == 0)
+            return null;
+        if (Enum.TryParse(text, ignoreCase: true, out T value) && Enum.IsDefined(value))
+            return value;
+        warnings.Add($"[{section}] {key}='{text}' is invalid and was ignored.");
+        return null;
+    }
 }

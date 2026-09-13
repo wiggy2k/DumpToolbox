@@ -181,6 +181,7 @@ public partial class MainWindow
         LoadRememberedPath(DicOutputBox, "DIC", "OutputPath");
         DicAllowMissingCheckBox.IsChecked = _userSettings.GetBool("DIC", "AllowMissing", false);
         DicForceRehashCheckBox.IsChecked = _userSettings.GetBool("DIC", "ForceRehash", false);
+        DicForceMatchedJolietNamesCheckBox.IsChecked = _userSettings.GetBool("DIC", "ForceMatchedJolietNames", false);
         DicVerboseLoggingCheckBox.IsChecked = _userSettings.GetBool("DIC", "verbose",
             _userSettings.GetBool("General", "verbose", false));
 
@@ -317,6 +318,7 @@ public partial class MainWindow
             SaveRememberedPath("DIC", "OutputPath", DicOutputBox.Text);
             _userSettings.Set("DIC", "AllowMissing", Checked(DicAllowMissingCheckBox));
             _userSettings.Set("DIC", "ForceRehash", Checked(DicForceRehashCheckBox));
+            _userSettings.Set("DIC", "ForceMatchedJolietNames", Checked(DicForceMatchedJolietNamesCheckBox));
             _userSettings.Set("DIC", "verbose", Checked(DicVerboseLoggingCheckBox));
             _userSettings.RemoveKey("DIC", "VerboseLogging");
 
@@ -645,6 +647,7 @@ public partial class MainWindow
                 DicOutputBox.Text = string.Empty;
                 DicAllowMissingCheckBox.IsChecked = false;
                 DicForceRehashCheckBox.IsChecked = false;
+                DicForceMatchedJolietNamesCheckBox.IsChecked = false;
                 DicVerboseLoggingCheckBox.IsChecked = false;
                 break;
             case "IRD":

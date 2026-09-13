@@ -478,12 +478,13 @@
           <Button x:Name="DicOutputBrowseButton" Grid.Row="3" Grid.Column="2" Click="DicOutputBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
         </Grid>
 
-        <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="14">
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="14">
           <Button x:Name="DicLoadButton" Grid.Column="0" Content="Load DIC logs" Click="DicLoadButton_Click"/>
           <Button x:Name="DicClearStateButton" Grid.Column="1" Content="Clear saved matches" Click="DicClearStateButton_Click" IsEnabled="False"/>
           <CheckBox x:Name="DicAllowMissingCheckBox" Grid.Column="2" Content="Allow missing files" IsChecked="False" VerticalAlignment="Center"/>
           <CheckBox x:Name="DicForceRehashCheckBox" Grid.Column="3" IsChecked="False" VerticalAlignment="Center"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M17.7,6.3 C16.2,4.9 14.2,4 12,4 C7.6,4 4,7.6 4,12 C4,16.4 7.6,20 12,20 C15.7,20 18.8,17.5 19.7,14 H17.6 C16.8,16.3 14.6,18 12,18 C8.7,18 6,15.3 6,12 C6,8.7 8.7,6 12,6 C13.7,6 15.2,6.7 16.3,7.7 L13,11 H21 V3 Z"/><TextBlock Text="Force rehash / clear cache"/></StackPanel></CheckBox>
-          <Button x:Name="DicClearSavedInputsButton" Grid.Column="5" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
+          <CheckBox x:Name="DicForceMatchedJolietNamesCheckBox" Grid.Column="4" Content="Force matched Joliet names" IsChecked="False" VerticalAlignment="Center" ToolTip.Tip="Use saved matched source-relative pathnames as Joliet names without projecting them back to the primary ISO9660 aliases. Payload, size, extent, and donor checks remain enforced."/>
+          <Button x:Name="DicClearSavedInputsButton" Grid.Column="6" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
         </Grid>
 
         <Grid Grid.Row="2" RowDefinitions="Auto,Auto" RowSpacing="6">

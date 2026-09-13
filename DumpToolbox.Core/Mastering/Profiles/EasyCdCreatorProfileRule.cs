@@ -15,12 +15,13 @@ internal static class EasyCdCreatorProfileRule
 
         builder.AddName("Easy CD Creator");
         builder.SupplementaryRootXaFileNumber = rootFileNumber;
-        // Easy CD Creator preserves the primary ISO9660 directory-record sequence in
-        // its supplementary tree. Its Joliet path table can still follow UCS-2 order;
-        // the exception applies to records within each directory, not directory numbers.
+        // Updated cross-disc evidence shows that Easy CD Creator preserves both the
+        // primary ISO9660 directory-record sequence and primary path-table numbering in
+        // its supplementary tree.
         builder.JolietRecordOrdering = JolietRecordOrdering.PreservePrimaryRecordOrder;
+        builder.JolietPathTableOrdering = JolietPathTableOrdering.PreservePrimaryDirectoryOrder;
         builder.AddRule($"Easy CD Creator supplementary-root XA file number 0x{rootFileNumber:X2}");
-        builder.AddRule("Easy CD Creator supplementary directory records retain primary ISO9660 record order");
+        builder.AddRule("Easy CD Creator supplementary records and path table retain primary ISO9660 order");
         return true;
     }
 }

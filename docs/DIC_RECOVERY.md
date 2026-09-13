@@ -37,6 +37,8 @@ The matcher does not accept size-only or arbitrary filename guesses. Validated u
 
 A cooked ISO or raw BIN/IMG can supply payloads. Same-disc primary metadata is copied only when PVD identity and volume label match. A UDF-only image has no comparable ISO9660 PVD, so it is always payload-only and never supplies filesystem metadata, Joliet identity, or raw-sector exactness. Mandatory donor regions include non-empty Associated File payloads, Extended Attribute Records, and ambiguous colliding non-associated records that a mounted filesystem cannot prove.
 
+**Force matched Joliet names** treats every saved source-relative pathname on an accepted match as authoritative Joliet name/casing evidence, without projecting it back to the target's primary ISO9660 alias. This is useful when a mastering tool generated numbered collision aliases that cannot be reversed reliably. It does not bypass payload matching, file-size/extent checks, donor identity checks, or the requirement that every ordinary file have a saved pathname. The option is off by default.
+
 UDF VAT/VDS history is intentionally not folded into logical file SHA-1 matching. Disc Evidence can preserve and compare those structures separately, but DIC cannot synthesize a byte-exact UDF mastering from a logical file tree or ordinary `*_volDesc.txt` evidence. Exact UDF reconstruction requires the original structural sectors or equivalent raw descriptor/VAT evidence.
 
 Optional exactness regions—such as unproven system area, file-tail slack or missing metadata—remain zero-filled in a best-effort rebuild unless an exact same-disc donor supplies them. Raw-only anomalies require a 2352-byte donor; a cooked donor cannot provide Mode 2 Form 2 payload bytes or malformed raw framing.
@@ -49,7 +51,7 @@ Exact raw-sector overrides and deterministic fill recipes take precedence over i
 
 ## Runtime reconstruction rules
 
-- `EOFSlackRules.ini` contains mastering-specific post-EOF residue-copy rules. No match means normal zero-filled slack. Ambiguous matching rules require a user decision or hash-based selection.
-- `JolietNamingRules.ini` contains mastering-specific Joliet-to-primary naming profiles; generic conservative projection remains the fallback.
+- `EOFSlackRules.ini` contains mastering-specific post-EOF residue-copy rules. `ApplyMode=Direct` is reserved for fully reproduced observations; `ApplyMode=HashTrial` tests the zero-filled baseline and matching residue candidates only when an expected whole-image hash is available. No verified match leaves normal zero-filled slack.
+- `JolietNamingRules.ini` contains mastering-specific Joliet-to-primary naming profiles. Profiles can also select file versioning (`Version1` or `None`), directory-record ordering, path-table ordering, and the safety-gated `OpaqueTildeAlias`/`HexOrdinalAlias` families; generic conservative projection remains the fallback.
 - Deleting either file causes current defaults to be recreated on next use. Existing files are not overwritten automatically.
 - ISOCD/Pantaray FS/TM payload repair is shared with SkeleTool and never overwrites conflicting non-zero bytes.

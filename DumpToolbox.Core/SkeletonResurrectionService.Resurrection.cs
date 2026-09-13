@@ -339,7 +339,9 @@ public sealed partial class SkeletonResurrectionService
         return any && ok;
     }
 
-    private static EofSlackRule? TryEofSlackRulesAgainstExpectedHashes(
+    private sealed record EofSlackTrialResult(EofSlackRule? Rule, bool ExpectedHashesMatched);
+
+    private static EofSlackTrialResult TryEofSlackRulesAgainstExpectedHashes(
         SkeletonInspectionResult inspection,
         IReadOnlyDictionary<string, SkeletonSourceMatch> matches,
         string imagePath,
@@ -352,6 +354,23 @@ public sealed partial class SkeletonResurrectionService
         File.Copy(imagePath, backup, overwrite: true);
         try
         {
+            HashCalculationResult baseline = new HashCalculationService().CalculateAsync(
+                imagePath,
+                new HashCalculationOptions(Crc32: true, Md5: true, Sha1: true),
+                cancellationToken: cancellationToken).GetAwaiter().GetResult();
+            string baselineCrc = baseline.Hashes["CRC32"];
+            string baselineMd5 = baseline.Hashes["MD5"];
+            string baselineSha1 = baseline.Hashes["SHA-1"];
+            bool baselineMatches = expectedDatTarget is not null
+                ? baseline.FileLength == expectedDatTarget.Size &&
+                  string.Equals(baselineCrc, expectedDatTarget.Crc32, StringComparison.OrdinalIgnoreCase) &&
+                  string.Equals(baselineMd5, expectedDatTarget.Md5, StringComparison.OrdinalIgnoreCase) &&
+                  string.Equals(baselineSha1, expectedDatTarget.Sha1, StringComparison.OrdinalIgnoreCase)
+                : ExpectedInspectionHashesMatch(inspection, baselineCrc, baselineMd5, baselineSha1);
+            activity?.Report($"EOF slack trial [Default] zero-filled residue: {(baselineMatches ? "DESTINATION HASH MATCH" : "no match")}");
+            if (baselineMatches)
+                return new EofSlackTrialResult(null, ExpectedHashesMatched: true);
+
             foreach (EofSlackRule candidate in rules)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -375,11 +394,11 @@ public sealed partial class SkeletonResurrectionService
 
                 activity?.Report($"EOF slack trial [{candidate.Section}] {candidate.Name}, delta {candidate.DeltaSectors:N0}: {(matchesExpected ? "DESTINATION HASH MATCH" : "no match")}");
                 if (matchesExpected)
-                    return candidate;
+                    return new EofSlackTrialResult(candidate, ExpectedHashesMatched: true);
             }
 
             File.Copy(backup, imagePath, overwrite: true);
-            return null;
+            return new EofSlackTrialResult(null, ExpectedHashesMatched: false);
         }
         finally
         {
@@ -437,11 +456,43 @@ public sealed partial class SkeletonResurrectionService
         if (matchingRules.Count == 0)
             return;
 
+        bool canVerifyExpectedHashes = HasExpectedImageHashes(inspection) || expectedDatTarget is not null;
+        if (canVerifyExpectedHashes && matchingRules.Any(candidate => candidate.ApplyMode == EofSlackApplyMode.HashTrial))
+        {
+            EofSlackTrialResult trial = TryEofSlackRulesAgainstExpectedHashes(
+                inspection, matches, imagePath, matchingRules, expectedDatTarget, activity, cancellationToken);
+            if (!trial.ExpectedHashesMatched)
+            {
+                activity?.Report($"{sourceLabel}: neither default zero-filled EOF slack nor any matching observation produced the expected destination hashes; leaving default zero-filled EOF slack unchanged.");
+            }
+            else if (trial.Rule is null)
+            {
+                activity?.Report($"{sourceLabel}: default zero-filled EOF slack already reproduced the expected destination hash(es); no mastering residue was applied.");
+            }
+            else
+            {
+                activity?.Report($"{sourceLabel}: EOF slack observation [{trial.Rule.Section}] '{trial.Rule.Name}' selected and retained because it reproduced the expected destination hash(es).");
+            }
+            return;
+        }
+
+        EofSlackRule[] directlyApplicableRules = matchingRules
+            .Where(candidate => candidate.ApplyMode == EofSlackApplyMode.Direct)
+            .ToArray();
+        if (directlyApplicableRules.Length == 0)
+        {
+            activity?.Report(
+                $"{sourceLabel}: {matchingRules.Count:N0} EOF slack observation(s) match, but all are HashTrial rules and no expected image hash is available; " +
+                "leaving default zero-filled EOF slack unchanged.");
+            return;
+        }
+        matchingRules = directlyApplicableRules;
+
         EofSlackRule rule;
         if (matchingRules.Count > 1)
         {
             string names = string.Join(", ", matchingRules.Select(r => $"[{r.Section}] {r.Name} ({r.DeltaSectors:N0} sectors)"));
-            bool canTryAll = HasExpectedImageHashes(inspection) || expectedDatTarget is not null;
+            bool canTryAll = canVerifyExpectedHashes;
             activity?.Report(
                 $"{sourceLabel}: EOF slack ambiguity — {matchingRules.Count:N0} enabled observations match this mastering signature. " +
                 $"Both/all have been observed on comparable discs. Matches: {names}");
@@ -454,14 +505,17 @@ public sealed partial class SkeletonResurrectionService
 
             if (decision.TryAllAndVerify && canTryAll)
             {
-                EofSlackRule? verified = TryEofSlackRulesAgainstExpectedHashes(
+                EofSlackTrialResult trial = TryEofSlackRulesAgainstExpectedHashes(
                     inspection, matches, imagePath, matchingRules, expectedDatTarget, activity, cancellationToken);
-                if (verified is null)
+                if (!trial.ExpectedHashesMatched)
                 {
-                    activity?.Report($"{sourceLabel}: none of the matching EOF slack observations produced the expected destination hashes; leaving default zero-filled EOF slack unchanged.");
+                    activity?.Report($"{sourceLabel}: neither default zero-filled EOF slack nor any matching observation produced the expected destination hashes; leaving default zero-filled EOF slack unchanged.");
                     return;
                 }
-                activity?.Report($"{sourceLabel}: EOF slack observation [{verified.Section}] '{verified.Name}' selected and retained because it reproduced the expected destination hash(es).");
+                if (trial.Rule is null)
+                    activity?.Report($"{sourceLabel}: default zero-filled EOF slack already reproduced the expected destination hash(es); no mastering residue was applied.");
+                else
+                    activity?.Report($"{sourceLabel}: EOF slack observation [{trial.Rule.Section}] '{trial.Rule.Name}' selected and retained because it reproduced the expected destination hash(es).");
                 return;
             }
             else

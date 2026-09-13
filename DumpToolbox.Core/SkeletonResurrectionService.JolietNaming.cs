@@ -535,6 +535,26 @@ public sealed partial class SkeletonResurrectionService
             return true;
         }
 
+        // FinalBuilder, CeQuadrat/WinOnCD and Roxio Burn Engine can assign an
+        // opaque six-character token followed by '~x'. The token is not derivable
+        // from the display name, so this deliberately requires an explicit
+        // mastering profile. Complete-path, exact-size and reverse-uniqueness
+        // checks remain mandatory at the caller.
+        if (JolietNamingRuleService.ProfileExplicitlyAllows(profile, "OpaqueTildeAlias") &&
+            JolietComponentMatchesOpaqueTildeAlias(source, target, isFile))
+        {
+            return true;
+        }
+
+        // Prassi/Primo and RecordNow use a three-character name prefix plus a
+        // four-digit hexadecimal ordinal (for example UBI_000A). As with opaque
+        // aliases, accept this only for a formatter profile that opts in.
+        if (JolietNamingRuleService.ProfileExplicitlyAllows(profile, "HexOrdinalAlias") &&
+            JolietComponentMatchesHexOrdinalAlias(source, target, isFile))
+        {
+            return true;
+        }
+
         // Some ISO authoring tools expose a DOS-style numeric short alias in the
         // primary tree while retaining the long display name in Joliet, e.g.
         // "Desktop Theme" -> "DESKTO~1". The numeric suffix is collision-dependent,
@@ -542,6 +562,77 @@ public sealed partial class SkeletonResurrectionService
         // caller's complete-path, exact-size and reverse-uniqueness checks decide
         // whether the association is safe.
         return JolietNamingRuleService.ProfileAllows(profile, "NumericAlias") && JolietComponentMatchesNumericShortAlias(source, target, isFile);
+    }
+
+    private static bool JolietComponentMatchesOpaqueTildeAlias(string source, string target, bool isFile)
+    {
+        SplitAliasComponent(source, isFile, out _, out string sourceExtension);
+        SplitAliasComponent(target, isFile, out string targetStem, out string targetExtension);
+        if (!Regex.IsMatch(
+                targetStem,
+                @"^[A-Z0-9_$%\-@!#&(){}^`']{1,6}~[A-Z0-9]$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        return !isFile || AliasExtensionsCompatible(sourceExtension, targetExtension);
+    }
+
+    private static bool JolietComponentMatchesHexOrdinalAlias(string source, string target, bool isFile)
+    {
+        SplitAliasComponent(source, isFile, out string sourceStem, out string sourceExtension);
+        SplitAliasComponent(target, isFile, out string targetStem, out string targetExtension);
+        Match match = Regex.Match(
+            targetStem,
+            @"^(?<prefix>[A-Z0-9]{1,3})_[0-9A-F]{4}$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return false;
+
+        string foldedSource = new(sourceStem.Normalize(NormalizationForm.FormD)
+            .Where(ch => CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+            .Select(char.ToUpperInvariant)
+            .Where(char.IsLetterOrDigit)
+            .ToArray());
+        if (!foldedSource.StartsWith(match.Groups["prefix"].Value, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return !isFile || AliasExtensionsCompatible(sourceExtension, targetExtension);
+    }
+
+    private static void SplitAliasComponent(
+        string value,
+        bool isFile,
+        out string stem,
+        out string extension)
+    {
+        stem = value;
+        extension = string.Empty;
+        if (!isFile)
+            return;
+
+        int dot = value.LastIndexOf('.');
+        if (dot <= 0 || dot >= value.Length - 1)
+            return;
+        stem = value[..dot];
+        extension = value[(dot + 1)..];
+    }
+
+    private static bool AliasExtensionsCompatible(string sourceExtension, string targetExtension)
+    {
+        static string Fold(string value) => new(value.Normalize(NormalizationForm.FormD)
+            .Where(ch => CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+            .Select(char.ToUpperInvariant)
+            .Where(ch => (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_')
+            .ToArray());
+
+        string source = Fold(sourceExtension);
+        string target = Fold(targetExtension);
+        if (target.Length == 0)
+            return source.Length == 0;
+        string expected = source.Length <= 3 ? source : source[..3];
+        return expected.Equals(target, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryGetNumericShortAliasFamilyParts(

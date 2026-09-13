@@ -12,11 +12,17 @@ public sealed partial class DicLogImportService
         SkeletonInspectionResult inspection,
         IReadOnlyDictionary<string, SkeletonSourceMatch> matches,
         string sourceDirectory,
+        bool forceMatchedJolietNames = false,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.Run(
-            () => ApplyMatchedJolietNamesCore(inspection, matches, sourceDirectory, cancellationToken),
+            () => ApplyMatchedJolietNamesCore(
+                inspection,
+                matches,
+                sourceDirectory,
+                forceMatchedJolietNames,
+                cancellationToken),
             cancellationToken);
     }
 
@@ -25,6 +31,7 @@ public sealed partial class DicLogImportService
         SkeletonInspectionResult inspection,
         IReadOnlyDictionary<string, SkeletonSourceMatch> matches,
         string sourceDirectory,
+        bool forceMatchedJolietNames,
         CancellationToken cancellationToken)
     {
         var warnings = new List<string>();
@@ -65,6 +72,7 @@ public sealed partial class DicLogImportService
         var directoryMetadata = ReadPrimaryDirectoryMetadata(inspection, cancellationToken);
         int matchedUsed = 0;
         int sourcePathsUsed = 0;
+        int forcedSourcePathsUsed = 0;
         int dicAliasesUsed = 0;
         int zeroLengthPrimaryNameFallbacks = 0;
         int supplementaryOnlyZeroLengthAliases = 0;
@@ -103,15 +111,18 @@ public sealed partial class DicLogImportService
                     candidatePath = mountedDiscJolietPath;
                     sourcePathsUsed++;
                 }
-                else if (!string.IsNullOrWhiteSpace(relative) && MatchMethodTrustsRelativePath(match.MatchMethod))
+                else if (!string.IsNullOrWhiteSpace(relative))
                 {
                     string normalizedRelative = NormalizeIsoPath(relative);
                     // Later-stage matchers can prove source identity even when the long Joliet
                     // name cannot project back to an unrelated primary ISO9660 short alias.
                     // Once that identity has been proven, preserve the recovered source-relative
                     // pathname as authoritative Joliet evidence instead of rejecting it again.
-                    bool relativePathMatches = MatchMethodProvesJolietIdentity(match.MatchMethod) ||
-                                               SourceJolietPathMatchesPrimaryEntry(normalizedRelative, isoPath);
+                    bool relativePathMatches = MatchedJolietPathCanBeUsed(
+                        normalizedRelative,
+                        isoPath,
+                        match.MatchMethod,
+                        forceMatchedJolietNames: false);
 
                     // v0.1.12: the collision-alias matcher is deliberately stricter than
                     // the ordinary Joliet projection matcher: it requires parent-path
@@ -120,13 +131,16 @@ public sealed partial class DicLogImportService
                     // accepted a source file, its long relative pathname is trustworthy
                     // Joliet evidence even though the ordinary projection test cannot map
                     // e.g. MAR20092.CAB back to Mar2009_d3dx10_41_x86.cab.
-                    if (!relativePathMatches && MatchMethodTrustsCollisionAliasPath(match.MatchMethod))
-                        relativePathMatches = SourceJolietPathMatchesPrimaryCollisionAlias(normalizedRelative, isoPath);
-
-                    if (relativePathMatches)
+                    if (MatchedJolietPathCanBeUsed(
+                            normalizedRelative,
+                            isoPath,
+                            match.MatchMethod,
+                            forceMatchedJolietNames))
                     {
                         candidatePath = normalizedRelative;
                         sourcePathsUsed++;
+                        if (!relativePathMatches)
+                            forcedSourcePathsUsed++;
                     }
                     else
                     {
@@ -176,6 +190,13 @@ public sealed partial class DicLogImportService
             files.Add(reconstructedFile);
             if (entry.DataLength == 0)
                 zeroLengthPrimaryAnchors.Add((NormalizeIsoPath(isoPath), reconstructedFile));
+        }
+
+        if (forcedSourcePathsUsed > 0)
+        {
+            warnings.Add(
+                $"FORCED JOLIET NAMES: accepted {forcedSourcePathsUsed:N0} matched source-relative pathname(s) without ISO9660 projection/collision revalidation. " +
+                "Payload matching, file sizes, extents, and donor identity checks were not bypassed.");
         }
 
         if (missingNameEvidence.Count > 0)
@@ -826,6 +847,30 @@ public sealed partial class DicLogImportService
         => method.Contains("Joliet", StringComparison.OrdinalIgnoreCase) ||
            method.Equals("ISO9660 exact relative path+filename+size", StringComparison.OrdinalIgnoreCase) ||
            MatchMethodProvesJolietIdentity(method);
+
+    internal static bool MatchedJolietPathCanBeUsed(
+        string sourcePath,
+        string isoPath,
+        string matchMethod,
+        bool forceMatchedJolietNames)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath))
+            return false;
+        if (forceMatchedJolietNames)
+            return true;
+        if (!MatchMethodTrustsRelativePath(matchMethod))
+            return false;
+
+        string normalized = NormalizeIsoPath(sourcePath);
+        if (MatchMethodProvesJolietIdentity(matchMethod) ||
+            SourceJolietPathMatchesPrimaryEntry(normalized, isoPath))
+        {
+            return true;
+        }
+
+        return MatchMethodTrustsCollisionAliasPath(matchMethod) &&
+               SourceJolietPathMatchesPrimaryCollisionAlias(normalized, isoPath);
+    }
 
     // These matchers only succeed after they have uniquely established a source-file
     // identity in the correct parent directory. They therefore also prove the recovered

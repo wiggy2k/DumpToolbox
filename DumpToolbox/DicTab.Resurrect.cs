@@ -49,6 +49,7 @@ public partial class MainWindow
                 inspection,
                 _dicMatches,
                 DicSourceFolderBox.Text?.Trim() ?? string.Empty,
+                DicForceMatchedJolietNamesCheckBox.IsChecked == true,
                 _dicCts.Token);
             if (jolietUpdate.Updated)
                 AppendDicLog($"Joliet metadata prepared from matched source names before resurrection: {jolietUpdate.SourcePathsUsed:N0} source pathname(s).");

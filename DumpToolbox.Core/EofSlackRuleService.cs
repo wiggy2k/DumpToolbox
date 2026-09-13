@@ -3,6 +3,12 @@ using System.Text;
 
 namespace DumpToolbox.Core;
 
+public enum EofSlackApplyMode
+{
+    Direct,
+    HashTrial
+}
+
 public sealed record EofSlackRule(
     string Section,
     string Name,
@@ -10,7 +16,8 @@ public sealed record EofSlackRule(
     string DataPreparerContains,
     string SystemIdMatch,
     long DeltaSectors,
-    string Confidence);
+    string Confidence,
+    EofSlackApplyMode ApplyMode = EofSlackApplyMode.Direct);
 
 public sealed record EofSlackRuleSet(
     string FilePath,
@@ -134,6 +141,7 @@ public static class EofSlackRuleService
             string system = Get(values, "SystemIdMatch", "*");
             string name = Get(values, "Name", sectionName);
             string confidence = Get(values, "Confidence");
+            string applyModeText = Get(values, "ApplyMode", "Direct");
 
             if (string.IsNullOrWhiteSpace(app) && string.IsNullOrWhiteSpace(dataPreparer))
             {
@@ -147,7 +155,19 @@ public static class EofSlackRuleService
                 continue;
             }
 
-            rules.Add(new EofSlackRule(sectionName, name, app, dataPreparer, system, delta, confidence));
+            if (!Enum.TryParse(applyModeText, ignoreCase: true, out EofSlackApplyMode applyMode) ||
+                !Enum.IsDefined(applyMode))
+            {
+                warnings.Add($"[{sectionName}] ignored: ApplyMode must be Direct or HashTrial.");
+                continue;
+            }
+
+            // RequireExpectedHash was briefly documented while this safety control was
+            // being prototyped. Continue to accept it as a backwards-compatible alias.
+            if (GetBool(values, "RequireExpectedHash", false))
+                applyMode = EofSlackApplyMode.HashTrial;
+
+            rules.Add(new EofSlackRule(sectionName, name, app, dataPreparer, system, delta, confidence, applyMode));
         }
 
         return new EofSlackRuleSet(ExternalFilePath, globallyEnabled, rules, warnings);

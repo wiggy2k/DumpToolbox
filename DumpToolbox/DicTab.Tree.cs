@@ -134,6 +134,7 @@ public partial class MainWindow
         DicLoadButton.IsEnabled = !running;
         DicAllowMissingCheckBox.IsEnabled = !running;
         DicForceRehashCheckBox.IsEnabled = !running;
+        DicForceMatchedJolietNamesCheckBox.IsEnabled = !running;
         DicVerboseLoggingCheckBox.IsEnabled = !running;
         DicLogPathBox.IsReadOnly = running;
         DicSourceFolderBox.IsReadOnly = running;
