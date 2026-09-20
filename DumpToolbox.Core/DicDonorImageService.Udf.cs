@@ -82,6 +82,7 @@ public sealed partial class DicDonorImageService
             false,
             0,
             true,
+            Array.Empty<NeroNriProjectInfo>(),
             warnings);
     }
 

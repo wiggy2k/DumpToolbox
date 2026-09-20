@@ -84,8 +84,71 @@ public sealed record SkeletonInspectionResult(
     IReadOnlyList<DicSupplementaryDirectoryHint>? DicSupplementaryDirectoryHints = null,
     IReadOnlyList<DicHfsPartitionInspection>? DicHfsPartitions = null)
 {
+    /// <summary>
+    /// Random-access skeleton used internally when <see cref="SkeletonPath"/> was a
+    /// compressed stream or an archive. The selected path remains available for
+    /// display, output naming, and companion-log lookup.
+    /// </summary>
+    public string? MaterializedSkeletonPath { get; init; }
+    public string EffectiveSkeletonPath => MaterializedSkeletonPath ?? SkeletonPath;
+    public string SkeletonInputFormat { get; init; } = "uncompressed skeleton";
+    public bool SkeletonWasCompressed => MaterializedSkeletonPath is not null;
     public IReadOnlyList<string> FilesMissingFromHashManifest { get; init; } = Array.Empty<string>();
     public int MissingHashEntryCount => FilesMissingFromHashManifest.Count;
+    public NeroSystemAreaRecoveryInfo? NeroSystemAreaRecovery { get; init; }
+    public IReadOnlyList<string> NeroNriWarnings { get; init; } = Array.Empty<string>();
+}
+
+public sealed record SkeletonInputPreparationProgress(
+    string Message,
+    long BytesWritten,
+    long? TotalBytes)
+{
+    public double? Fraction => TotalBytes is > 0
+        ? Math.Clamp((double)BytesWritten / TotalBytes.Value, 0, 1)
+        : null;
+}
+
+public sealed record NeroSystemAreaRecoveryInfo(
+    string ProjectFileName,
+    uint ProjectExtentLba,
+    uint ProjectDataLength,
+    string NeroIsoSignature,
+    string ExpectedSystemAreaSha1)
+{
+    /// <summary>
+    /// True when the hidden project record came from exact directory-sector bytes in
+    /// DiscImageCreator mainInfo rather than a SkeleTool image plus hash manifest.
+    /// </summary>
+    public bool DetectedFromDic { get; init; }
+
+    /// <summary>
+    /// False when DIC's byte-aligned system-area captures contradict the supported
+    /// Nero layout outside the four private bytes. Detection is still reported, but
+    /// automatic reconstruction is disabled.
+    /// </summary>
+    public bool DicSystemAreaLayoutCompatible { get; init; } = true;
+
+    /// <summary>
+    /// The private value when all four bytes were preserved directly by DIC's offset
+    /// evidence. Otherwise the value is solved from the final whole-image CRC32.
+    /// </summary>
+    public uint? DicKnownPrivateValue { get; init; }
+}
+
+public sealed record NeroSystemAreaRecoveryProgress(
+    long CandidatesTested,
+    long TotalCandidates,
+    TimeSpan Elapsed,
+    uint? PrivateValue = null)
+{
+    public double Fraction => TotalCandidates <= 0
+        ? 0
+        : Math.Clamp((double)CandidatesTested / TotalCandidates, 0, 1);
+
+    public double CandidatesPerSecond => Elapsed.TotalSeconds <= 0
+        ? 0
+        : CandidatesTested / Elapsed.TotalSeconds;
 }
 
 public sealed record DicHfsPartitionInspection(
@@ -181,7 +244,8 @@ public sealed record SkeletonSourceScanProgress(
     long BytesHashed = 0,
     int FilesHashed = 0,
     int FilesSkipped = 0,
-    int FilesCached = 0)
+    int FilesCached = 0,
+    string? DetectedNeroProject = null)
 {
     public double Fraction => BytesTotal <= 0 ? 0 : (double)BytesProcessed / BytesTotal;
 }
@@ -274,8 +338,14 @@ public sealed partial class SkeletonResurrectionService
     private sealed record IsoTree(
         string VolumeIdentifier,
         IReadOnlyList<IsoFileExtent> Files,
-        IReadOnlyList<uint> AreaStarts)
+        IReadOnlyList<uint> AreaStarts,
+        IReadOnlyList<NeroProjectEntry> NeroProjects,
+        IReadOnlyList<NeroNriPayloadRequirement> NeroProjectRequirements)
     {
+        // System-area reconstruction is safe only when exactly one verified hidden
+        // project identifies the 32-byte record unambiguously.
+        public NeroProjectEntry? NeroProject => NeroProjects.Count == 1 ? NeroProjects[0] : null;
+
         public long GetGapPayloadLength(uint gapStart, int payloadBytesPerSector)
         {
             foreach (uint next in AreaStarts)
@@ -287,6 +357,12 @@ public sealed partial class SkeletonResurrectionService
         }
     }
     private sealed record DirectoryRecord(uint Lba, uint DataLength, byte Flags, byte[] Identifier);
+    private sealed record NeroProjectEntry(
+        string FileName,
+        uint Lba,
+        uint DataLength,
+        string Signature,
+        string DirectoryNamespaces);
 
     private enum RawSectorPayloadKind
     {

@@ -68,7 +68,7 @@ public sealed class DiscMasteringOrderingExtractorTests
     [Fact]
     public void EvidenceSchemaRequiresExistingUnitsToBeRegathered()
     {
-        Assert.Equal(6, DiscEvidenceService.EvidenceSchema);
+        Assert.Equal(7, DiscEvidenceService.EvidenceSchema);
     }
 
     [Fact]
@@ -93,6 +93,45 @@ public sealed class DiscMasteringOrderingExtractorTests
             target, sources, sourceIsJoliet: true, namingProfile: null);
 
         Assert.Equal(2, counts.BeforeTimestamp);
+        Assert.Equal(1, counts.AfterTimestamp);
+    }
+
+    [Fact]
+    public void DeterministicProjectionCandidatesTakePriorityOverOpaqueTildeAliases()
+    {
+        DateTimeOffset time = new(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var target = Record("JOLIET", "/res/hq/maps/five.tim", 100, time, directoryExtent: 30, recordIndex: 2);
+        DiscFilesystemRecordEvidence[] sources =
+        [
+            Record("ISO9660", "/RES/HQ/MAPS/FIVE.TIM", 100, time, directoryExtent: 20, recordIndex: 2),
+            Record("ISO9660", "/RES/HQ/MAPS/SEVENT~1.TIM", 101, time, directoryExtent: 20, recordIndex: 3)
+        ];
+        JolietNamingProfile profile = NamingProfileWith(
+            "SeparatorInsensitive", "NumericAlias", "OpaqueTildeAlias");
+
+        DiscEvidenceCandidateCounts counts = DiscEvidenceService.CountCandidatesForEvidence(
+            target, sources, sourceIsJoliet: false, profile);
+
+        Assert.Equal(1, counts.BeforeTimestamp);
+        Assert.Equal(1, counts.AfterTimestamp);
+    }
+
+    [Fact]
+    public void OpaqueTildeAliasesRemainAvailableWhenDeterministicProjectionFindsNothing()
+    {
+        DateTimeOffset time = new(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var target = Record("ISO9660", "/DIRECTX/AP22B5~1.CAB", 100, time, directoryExtent: 20, recordIndex: 2);
+        DiscFilesystemRecordEvidence[] sources =
+        [
+            Record("JOLIET", "/DirectX/Apr2006_xinput_x86.cab", 100, time, directoryExtent: 30, recordIndex: 2)
+        ];
+        JolietNamingProfile profile = NamingProfileWith(
+            "Level1", "Level2", "PunctuationElision", "SeparatorInsensitive", "NumericAlias", "OpaqueTildeAlias");
+
+        DiscEvidenceCandidateCounts counts = DiscEvidenceService.CountCandidatesForEvidence(
+            target, sources, sourceIsJoliet: true, profile);
+
+        Assert.Equal(1, counts.BeforeTimestamp);
         Assert.Equal(1, counts.AfterTimestamp);
     }
 
@@ -209,6 +248,14 @@ WHERE type='table' AND name IN ('volume_descriptors','filesystem_records','path_
             Encoding.ASCII.GetBytes(identifier), extent, 1234, 0, false, recordingTime, rawTime,
             directoryExtent, recordIndex * 40, recordIndex);
     }
+
+    private static JolietNamingProfile NamingProfileWith(params string[] methods) => new(
+        "Test",
+        "Test",
+        "TEST",
+        string.Empty,
+        "*",
+        methods.ToHashSet(StringComparer.OrdinalIgnoreCase));
 
     private static byte[] PathTable(bool bigEndian)
     {

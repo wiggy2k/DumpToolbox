@@ -184,7 +184,7 @@ public static class JolietNamingRuleService
     {
         try
         {
-            using var fs=new FileStream(inspection.SkeletonPath,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);
+            using var fs=new FileStream(inspection.EffectiveSkeletonPath,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);
             long physicalLba=inspection.BaseLba+16;
             byte[] payload=new byte[2048];
             if (inspection.ImageKind==SkeletonImageKind.Cooked2048)

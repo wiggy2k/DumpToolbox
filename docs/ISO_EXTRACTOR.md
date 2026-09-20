@@ -4,12 +4,17 @@ ISO Extractor creates a DIC-compatible source folder from a cooked 2048-byte ISO
 
 ISO9660/Joliet filesystems are read directly rather than mounted through the operating system. This preserves Associated File records and same-path records that a normal filesystem view may hide or collapse.
 
+Nero's non-standard hidden `!!MSxxxx.NRI` project record is also recognised inside ISO9660 System Use data. A payload beginning with a valid length-prefixed `NeroISO` signature is extracted under `.dumptoolbox_iso_records/nero/`. The manifest records its exact LBA, length, SHA-1 and signature, and correlates it with Nero's 32-byte sector-15 system-area record when present.
+
+If an embedded NRI record or a structurally valid Nero sector-15 record references a payload that is absent or does not contain a valid `NeroISO` signature, extraction completes with an explicit warning that the NRI cannot be extracted or generated. A merely non-zero system area is not treated as Nero evidence.
+
 For a UDF-only image, the extractor reads the UDF tree directly, including write-once virtual partitions that use a Virtual Allocation Table. Immediate VATs and VATs stored in one or more non-contiguous extents are supported, with main/reserve descriptor-sequence fallback. UDF files are ordinary payload sources only: they do not acquire invented ISO9660 extents, flags, PVD identity, or Joliet authority.
 
 ## Output layout
 
 - Ordinary records are written to their normal relative paths where possible.
 - Additional or colliding records are stored under `.dumptoolbox_iso_records/`.
+- Embedded Nero NRI projects are stored under `.dumptoolbox_iso_records/nero/` rather than being exposed as ordinary visible ISO files.
 - `.dumptoolbox_iso_manifest.json` maps every extracted record to its original path and length. ISO/Joliet entries also retain their extent, flags and storage details; UDF-only entries retain their UDF pathname explicitly.
 
 Keep the manifest and private record directory with the extracted files. DIC uses ISO/Joliet records by exact identity and UDF records conservatively as payload-only pathname-and-size evidence rather than guessing from host filenames.

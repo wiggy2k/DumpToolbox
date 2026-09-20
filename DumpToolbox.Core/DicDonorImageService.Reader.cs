@@ -23,7 +23,9 @@ public sealed partial class DicDonorImageService
         bool HasJoliet,
         IReadOnlyList<DicDonorFile> Files,
         IReadOnlyList<DicDonorFile> JolietFiles,
-        HashSet<long> MetadataLbas);
+        HashSet<long> MetadataLbas,
+        NeroNriDetector.SystemAreaRecord? NeroSystemAreaRecord,
+        IReadOnlyList<NeroNriPayloadRequirement> NeroProjectRequirements);
 
     private sealed class DonorImageReader : IAsyncDisposable
     {

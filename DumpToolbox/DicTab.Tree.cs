@@ -43,6 +43,8 @@ public partial class MainWindow
             _dicNodes[entry.Path] = fileNode;
         }
 
+        SortSkeletonTreeNodes(_dicTreeRoots);
+
         SkeletonContentEntry[] special = inspection.Entries.Where(e => e.SpecialKind != SkeletonSpecialKind.None).ToArray();
         if (special.Length > 0)
         {

@@ -7,7 +7,7 @@ namespace DumpToolbox.Core;
 
 public sealed partial class SkeletoolCatalogueService
 {
-    private const int SchemaVersion = 4;
+    private const int SchemaVersion = 5;
     private static readonly SemaphoreSlim Gate = new(1, 1);
     private readonly SkeletonResurrectionService _skeleton = new();
     private readonly CueSheetAnalysisService _cue = new();
@@ -208,7 +208,11 @@ RETURNING id;";
         try
         {
             await using SqliteConnection db = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            foreach (SkeletonContentEntry entry in inspection.Entries.Where(e => e.CanRestore && !e.IsEmpty))
+            foreach (SkeletonContentEntry entry in inspection.Entries.Where(e =>
+                         e.CanRestore &&
+                         !e.IsEmpty &&
+                         !(e.SpecialKind == SkeletonSpecialKind.SystemArea &&
+                           SkeletonResurrectionService.CanRecoverNeroSystemArea(inspection))))
             {
                 foreach ((string? hash, bool xa) in new[] { (entry.Sha1, false), (entry.XaSha1, true) })
                 {
@@ -261,10 +265,13 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
                                 SourceImageExtents: imageExtents, CatalogueSource: catalogueSource);
                         }
                         else if (scannerKind.Equals("7z", StringComparison.OrdinalIgnoreCase) ||
-                                 scannerKind.Equals("UDF", StringComparison.OrdinalIgnoreCase))
+                                 scannerKind.Equals("UDF", StringComparison.OrdinalIgnoreCase) ||
+                                 scannerKind.Equals("NRI", StringComparison.OrdinalIgnoreCase))
                         {
                             result[entry.Path] = new SkeletonSourceMatch(resolved, sourcePath, hash!.ToLowerInvariant(), false,
-                                scannerKind.Equals("UDF", StringComparison.OrdinalIgnoreCase)
+                                scannerKind.Equals("NRI", StringComparison.OrdinalIgnoreCase)
+                                    ? "SHA-1 catalogue Nero NRI file (deferred)"
+                                    : scannerKind.Equals("UDF", StringComparison.OrdinalIgnoreCase)
                                     ? "SHA-1 catalogue UDF file (deferred)"
                                     : "SHA-1 catalogue extracted file (deferred)",
                                 relativePath, SourceLength: size,
@@ -352,6 +359,21 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
                 continue;
             }
 
+            if (source.ScannerKind.Equals("NRI", StringComparison.OrdinalIgnoreCase))
+            {
+                long expected = match.SourceLength ?? match.Entry.DataLength;
+                if (!File.Exists(imagePath) || new FileInfo(imagePath).Length != expected)
+                    throw new InvalidDataException($"SHA-1 catalogue NRI payload did not materialize at the expected {expected:N0} bytes.");
+
+                result[path] = match with
+                {
+                    SourcePath = imagePath,
+                    MatchMethod = "SHA-1 catalogue Nero NRI file",
+                    CatalogueSource = null
+                };
+                continue;
+            }
+
             throw new InvalidOperationException(
                 $"SHA-1 catalogue match '{path}' cannot be materialized from scanner kind '{source.ScannerKind}'.");
         }
@@ -366,7 +388,13 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
         {
             await using SqliteConnection db = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using SqliteCommand cmd = db.CreateCommand();
-            cmd.CommandText = @"SELECT id,kind,current_path,relative_path,sha1 FROM units WHERE present=1 AND last_scanned_utc IS NOT NULL AND (evidence_gathered=0 OR COALESCE(evidence_schema,0)<$schema) ORDER BY current_path COLLATE NOCASE";
+            cmd.CommandText = @"SELECT id,kind,current_path,relative_path,sha1
+FROM units
+WHERE present=1
+  AND last_scanned_utc IS NOT NULL
+  AND (evidence_gathered=0 OR COALESCE(evidence_schema,0)<$schema)
+  AND EXISTS(SELECT 1 FROM images i WHERE i.unit_id=units.id AND i.scanner_kind<>'NRI')
+ORDER BY current_path COLLATE NOCASE";
             cmd.Parameters.AddWithValue("$schema", evidenceSchema);
             await using SqliteDataReader r = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             var result = new List<SkeletoolEvidenceUnit>();
@@ -384,7 +412,10 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
         {
             await using SqliteConnection db = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using SqliteCommand cmd = db.CreateCommand();
-            cmd.CommandText = @"SELECT i.id,i.entry_path,i.display_name,i.source_offset,i.source_length,i.image_kind,i.scanner_kind,u.kind,u.current_path,u.sha1 FROM images i JOIN units u ON u.id=i.unit_id WHERE i.unit_id=$id ORDER BY i.id";
+            cmd.CommandText = @"SELECT i.id,i.entry_path,i.display_name,i.source_offset,i.source_length,i.image_kind,i.scanner_kind,u.kind,u.current_path,u.sha1
+FROM images i JOIN units u ON u.id=i.unit_id
+WHERE i.unit_id=$id AND i.scanner_kind<>'NRI'
+ORDER BY i.id";
             cmd.Parameters.AddWithValue("$id", unitId);
             await using SqliteDataReader r = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             var result = new List<SkeletoolEvidenceImage>();
@@ -453,7 +484,7 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
         {
             try
             {
-                ScanOneImageResult scanned = await ScanOneImageAsync(unitId, imagePlan, ct).ConfigureAwait(false);
+                ScanOneImageResult scanned = await ScanOneImageAsync(unitId, imagePlan, activityLog, ct).ConfigureAwait(false);
                 images++; files += scanned.Files;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -507,7 +538,7 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
                         ImagePlan archivePlan = p with { SourceEntryPath = entryPath };
                         try
                         {
-                            ScanOneImageResult scanned = await ScanOneImageAsync(unitId, archivePlan, ct).ConfigureAwait(false);
+                            ScanOneImageResult scanned = await ScanOneImageAsync(unitId, archivePlan, activityLog, ct).ConfigureAwait(false);
                             images++; files += scanned.Files;
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -536,7 +567,11 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
         finally { TryDeleteDirectory(temp); }
     }
 
-    private async Task<ScanOneImageResult> ScanOneImageAsync(long unitId, ImagePlan plan, CancellationToken ct)
+    private async Task<ScanOneImageResult> ScanOneImageAsync(
+        long unitId,
+        ImagePlan plan,
+        IProgress<string>? activityLog,
+        CancellationToken ct)
     {
         string scanPath = plan.SourcePath;
         string? temporarySlice = null;
@@ -552,7 +587,9 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
             SkeletoolCatalogueImageContent content;
             try
             {
-                content = await _skeleton.ScanImageContentsForCatalogueAsync(scanPath, ct).ConfigureAwait(false);
+                content = !IsDirectImage(scanPath) && NeroNriDetector.IsLikelyStandaloneProjectFile(scanPath)
+                    ? await ScanStandaloneNeroProjectAsync(scanPath, ct).ConfigureAwait(false)
+                    : await _skeleton.ScanImageContentsForCatalogueAsync(scanPath, ct).ConfigureAwait(false);
             }
             catch (Exception primary) when (primary is InvalidOperationException or EndOfStreamException)
             {
@@ -571,12 +608,52 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
             string imageSha1 = await HashFileAsync(scanPath, ct).ConfigureAwait(false);
             await InsertImageAndFilesAsync(unitId, plan.SourceEntryPath, plan.DisplayName, plan.SourceOffset, plan.SourceLength,
                 imageSha1, content, ct).ConfigureAwait(false);
+            foreach (NeroNriProjectInfo project in content.NeroProjects ?? Array.Empty<NeroNriProjectInfo>())
+            {
+                activityLog?.Report(
+                    $"NERO NRI: {project.FileName}; {project.NeroIsoSignature}; {project.DirectoryNamespaces}; LBA {project.ExtentLba:N0}; " +
+                    $"{project.DataLength:N0} bytes; SHA-1 {project.Sha1}" +
+                    (project.HasMatchingSystemAreaRecord
+                        ? $"; sector 15 private bytes {project.SystemAreaPrivateValue:X8}"
+                        : string.Empty));
+            }
+            foreach (string warning in content.NeroNriWarnings ?? Array.Empty<string>())
+                activityLog?.Report("WARNING — NERO NRI: " + warning);
             return new ScanOneImageResult(content.Files.Count);
         }
         finally
         {
             if (temporarySlice is not null) TryDeleteDirectory(Path.GetDirectoryName(temporarySlice)!);
         }
+    }
+
+    private static async Task<SkeletoolCatalogueImageContent> ScanStandaloneNeroProjectAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        string? signature = await SkeletonResurrectionService.TryReadStandaloneNeroSignatureAsync(
+            path,
+            cancellationToken).ConfigureAwait(false);
+        if (signature is null)
+            throw new InvalidOperationException("The .NRI file does not contain a supported NeroISO signature.");
+
+        FileInfo file = new(path);
+        string sha1 = await HashFileAsync(path, cancellationToken).ConfigureAwait(false);
+        string fileName = Path.GetFileName(path);
+        var project = new NeroNriProjectInfo(
+            fileName,
+            0,
+            checked((uint)file.Length),
+            signature,
+            sha1,
+            false,
+            null);
+        return new SkeletoolCatalogueImageContent(
+            string.Empty,
+            null,
+            [new SkeletoolCatalogueImageFile("/" + fileName, file.Length, sha1, null)],
+            "NRI",
+            [project]);
     }
 
     private async Task<SkeletoolCatalogueImageContent> ScanImageVia7ZipAsync(string imagePath, CancellationToken ct)
@@ -658,8 +735,15 @@ ORDER BY CASE u.kind WHEN 'direct' THEN 0 ELSE 1 END, u.last_seen_utc DESC;";
             }
         }
 
-        foreach (string path in allFiles.Where(IsDirectImage))
+        foreach (string path in allFiles.Where(candidate =>
+                     IsDirectImage(candidate) || NeroNriDetector.IsLikelyStandaloneProjectFile(candidate)))
         {
+            if (!IsDirectImage(path) &&
+                await SkeletonResurrectionService.TryReadStandaloneNeroSignatureAsync(path, ct).ConfigureAwait(false) is null)
+            {
+                continue;
+            }
+
             // Any BIN named by a CUE is governed exclusively by that CUE. This includes
             // audio-only BINs and unusual/malformed CUE layouts which we deliberately do
             // not reinterpret as standalone images.

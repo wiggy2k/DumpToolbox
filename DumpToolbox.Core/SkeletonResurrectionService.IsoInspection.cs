@@ -42,6 +42,7 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
         CancellationToken cancellationToken)
     {
         byte[]? pvd = null;
+        byte[]? jolietSvd = null;
         int descriptorCount = 0;
         for (int descriptor = 0; descriptor < 64; descriptor++)
         {
@@ -52,6 +53,10 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
             descriptorCount++;
             if (sector[0] == 1)
                 pvd = sector;
+            else if (sector[0] == 2 && sector.Length >= 91 &&
+                     sector[88] == 0x25 && sector[89] == 0x2F &&
+                     sector[90] is 0x40 or 0x43 or 0x45)
+                jolietSvd ??= sector;
             if (sector[0] == 0xFF)
                 break;
         }
@@ -62,6 +67,7 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
         string volumeIdentifier = Encoding.ASCII.GetString(pvd, 40, 32).TrimEnd(' ', '\0');
         DirectoryRecord root = ParseDirectoryRecord(pvd, 156);
         var files = new List<IsoFileExtent>();
+        var neroProjects = new List<NeroProjectEntry>();
         var visitedDirectories = new HashSet<(uint Lba, uint Length)>();
         var areaStarts = new HashSet<uint>();
 
@@ -85,9 +91,54 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
             root.DataLength,
             "/",
             files,
+            neroProjects,
             visitedDirectories,
             areaStarts,
             cancellationToken);
+
+        if (jolietSvd is not null && jolietSvd[156] >= 34)
+        {
+            DirectoryRecord jolietRoot = ParseDirectoryRecord(jolietSvd, 156);
+            await ReadNeroDirectoryRecursiveAsync(
+                image,
+                jolietRoot.Lba,
+                jolietRoot.DataLength,
+                neroProjects,
+                new HashSet<(uint Lba, uint Length)>(),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        NeroProjectEntry[] distinctNeroProjects = neroProjects
+            .GroupBy(project => (project.FileName, project.Lba, project.DataLength))
+            .Select(group => group.First() with
+            {
+                DirectoryNamespaces = string.Join(
+                    "+",
+                    group.Select(project => project.DirectoryNamespaces)
+                        .Distinct(StringComparer.OrdinalIgnoreCase))
+            })
+            .ToArray();
+        var verifiedNeroProjects = new List<NeroProjectEntry>();
+        foreach (NeroProjectEntry candidate in distinctNeroProjects)
+        {
+            if (candidate.DataLength < 15 || candidate.Lba < image.BaseLba || candidate.Lba >= image.BaseLba + image.SectorCount)
+                continue;
+
+            try
+            {
+                uint bytesToRead = Math.Min(candidate.DataLength, 64u);
+                byte[] header = await image.ReadForm1BytesAsync(candidate.Lba, bytesToRead, cancellationToken);
+                if (!NeroNriDetector.TryReadPayloadSignature(header, out string signature))
+                    continue;
+
+                verifiedNeroProjects.Add(candidate with { Signature = signature });
+            }
+            catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException)
+            {
+                // Keep the embedded record as a requirement. Inspection must be able to
+                // warn about an unavailable NRI payload rather than failing the whole disc.
+            }
+        }
 
         uint volumeSpaceSize = BinaryPrimitives.ReadUInt32LittleEndian(pvd.AsSpan(80, 4));
         long volumeEnd = volumeSpaceSize > image.SectorCount
@@ -96,7 +147,16 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
         AddAreaStart(areaStarts, volumeEnd);
         AddAreaStart(areaStarts, (long)image.BaseLba + image.SectorCount);
 
-        return new IsoTree(volumeIdentifier, files, areaStarts.OrderBy(v => v).ToArray());
+        return new IsoTree(
+            volumeIdentifier,
+            files,
+            areaStarts.OrderBy(v => v).ToArray(),
+            verifiedNeroProjects,
+            distinctNeroProjects.Select(project => new NeroNriPayloadRequirement(
+                project.FileName,
+                project.Lba,
+                project.DataLength,
+                $"embedded {project.DirectoryNamespaces} directory record")).ToArray());
     }
 
     private static async Task ReadDirectoryRecursiveAsync(
@@ -105,6 +165,7 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
         uint directoryLength,
         string parentPath,
         List<IsoFileExtent> files,
+        List<NeroProjectEntry> neroProjects,
         HashSet<(uint Lba, uint Length)> visited,
         HashSet<uint> areaStarts,
         CancellationToken cancellationToken)
@@ -126,8 +187,22 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
             if (offset + recordLength > data.Length || recordLength < 34)
                 break;
 
+            int recordOffset = offset;
             DirectoryRecord record = ParseDirectoryRecord(data, offset);
             offset += recordLength;
+
+            if (NeroNriDetector.TryParseEmbeddedDirectoryRecord(
+                    data.AsSpan(recordOffset, recordLength),
+                    out NeroNriDetector.EmbeddedDirectoryRecord? neroRecord) &&
+                neroRecord is not null)
+            {
+                neroProjects.Add(new NeroProjectEntry(
+                    neroRecord.FileName,
+                    neroRecord.ExtentLba,
+                    neroRecord.DataLength,
+                    string.Empty,
+                    "ISO9660"));
+            }
 
             if (record.Identifier.Length == 1 && (record.Identifier[0] == 0 || record.Identifier[0] == 1))
                 continue;
@@ -147,6 +222,7 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
                     record.DataLength,
                     path,
                     files,
+                    neroProjects,
                     visited,
                     areaStarts,
                     cancellationToken);
@@ -197,6 +273,82 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
             }
         }
     }
+
+    private static async Task ReadNeroDirectoryRecursiveAsync(
+        SkeletonImageReader image,
+        uint directoryLba,
+        uint directoryLength,
+        List<NeroProjectEntry> neroProjects,
+        HashSet<(uint Lba, uint Length)> visited,
+        CancellationToken cancellationToken)
+    {
+        if (!visited.Add((directoryLba, directoryLength)))
+            return;
+
+        byte[] data = await image.ReadForm1BytesAsync(directoryLba, directoryLength, cancellationToken).ConfigureAwait(false);
+        int offset = 0;
+        while (offset < data.Length)
+        {
+            int recordLength = data[offset];
+            if (recordLength == 0)
+            {
+                offset = ((offset / CookedSectorSize) + 1) * CookedSectorSize;
+                continue;
+            }
+            if (recordLength < 34 || offset + recordLength > data.Length)
+                break;
+
+            DirectoryRecord record = ParseDirectoryRecord(data, offset);
+            if (NeroNriDetector.TryParseEmbeddedDirectoryRecord(
+                    data.AsSpan(offset, recordLength),
+                    out NeroNriDetector.EmbeddedDirectoryRecord? embedded) &&
+                embedded is not null)
+            {
+                neroProjects.Add(new NeroProjectEntry(
+                    embedded.FileName,
+                    embedded.ExtentLba,
+                    embedded.DataLength,
+                    string.Empty,
+                    "Joliet"));
+            }
+
+            offset += recordLength;
+            bool dot = record.Identifier.Length == 1 && (record.Identifier[0] == 0 || record.Identifier[0] == 1);
+            if (!dot && (record.Flags & 0x02) != 0)
+            {
+                await ReadNeroDirectoryRecursiveAsync(
+                    image,
+                    record.Lba,
+                    record.DataLength,
+                    neroProjects,
+                    visited,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    internal static bool TryParseEmbeddedNeroProjectDirectoryRecord(
+        ReadOnlySpan<byte> outerRecord,
+        out string fileName,
+        out uint extentLba,
+        out uint dataLength)
+    {
+        if (!NeroNriDetector.TryParseEmbeddedDirectoryRecord(outerRecord, out NeroNriDetector.EmbeddedDirectoryRecord? record) ||
+            record is null)
+        {
+            fileName = string.Empty;
+            extentLba = 0;
+            dataLength = 0;
+            return false;
+        }
+
+        fileName = record.FileName;
+        extentLba = record.ExtentLba;
+        dataLength = record.DataLength;
+        return true;
+    }
+
+    private static bool IsNeroProjectFileName(string value) => NeroNriDetector.IsProjectFileName(value);
 
     private static void AddAreaStart(HashSet<uint> starts, long lba)
     {

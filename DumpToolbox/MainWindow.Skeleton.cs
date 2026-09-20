@@ -20,15 +20,28 @@ public partial class MainWindow : Window
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "Choose redumper skeleton",
-            AllowMultiple = false
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Skeletons and compressed skeletons")
+                {
+                    Patterns = new[] { "*.skeleton", "*.zst", "*.zstd", "*.7z", "*.zip", "*.rar", "*.gz", "*.xz", "*.bz2" }
+                },
+                FilePickerFileTypes.All
+            }
         });
 
         if (files.Count == 0 || files[0].TryGetLocalPath() is not { } path)
             return;
 
         SkeletonPathBox.Text = path;
-        string hash = Path.ChangeExtension(path, ".hash");
-        if (File.Exists(hash))
+        string[] hashCandidates =
+        [
+            Path.ChangeExtension(path, ".hash"),
+            Path.ChangeExtension(Path.ChangeExtension(path, null), ".hash")
+        ];
+        string? hash = hashCandidates.FirstOrDefault(File.Exists);
+        if (hash is not null)
             SkeletonHashBox.Text = hash;
     }
 
@@ -113,10 +126,28 @@ public partial class MainWindow : Window
             _skeletonCts = new CancellationTokenSource();
             SetSkeletonRunning(true);
 
+            var preparationProgress = new Progress<SkeletonInputPreparationProgress>(p =>
+            {
+                SkeletonProgressBar.IsIndeterminate = p.Fraction is null;
+                if (p.Fraction is { } fraction)
+                    SkeletonProgressBar.Value = fraction * 100;
+                SkeletonProgressText.Text = p.Message;
+            });
+
             SkeletonInspectionResult inspection = await _skeletonService.InspectAsync(
                 skeleton,
                 hash,
+                preparationProgress,
                 _skeletonCts.Token);
+
+            SkeletonProgressBar.IsIndeterminate = false;
+            if (inspection.SkeletonWasCompressed)
+            {
+                AppendSkeletonLog(
+                    $"Prepared {inspection.SkeletonInputFormat}; expanded to a temporary random-access working copy " +
+                    $"({new FileInfo(inspection.EffectiveSkeletonPath).Length:N0} bytes). The selected file was not changed. " +
+                    $"Working copy: {inspection.EffectiveSkeletonPath}");
+            }
 
             _skeletonInspection = inspection;
             BuildSkeletonTree(inspection);
@@ -140,6 +171,7 @@ public partial class MainWindow : Window
                 : "cooked 2048-byte ISO";
 
             bool hasManifestWarnings = inspection.MissingHashEntryCount > 0 || inspection.UnmappedHashEntryCount > 0;
+            bool hasNeroNriWarnings = inspection.NeroNriWarnings.Count > 0;
             string manifestWarningSummary = inspection.MissingHashEntryCount > 0 && inspection.UnmappedHashEntryCount > 0
                 ? $" WARNING: {inspection.MissingHashEntryCount:N0} ISO file(s) have no manifest hash; {inspection.UnmappedHashEntryCount:N0} manifest entry/entries are unused."
                 : inspection.MissingHashEntryCount > 0
@@ -147,14 +179,25 @@ public partial class MainWindow : Window
                     : inspection.UnmappedHashEntryCount > 0
                         ? $" WARNING: {inspection.UnmappedHashEntryCount:N0} manifest entry/entries are unused."
                         : string.Empty;
+            string neroWarningSummary = hasNeroNriWarnings
+                ? $" WARNING: {inspection.NeroNriWarnings.Count:N0} required Nero NRI payload(s) are unavailable."
+                : string.Empty;
             SkeletonInspectionText.Text =
                 $"{kind}; {inspection.SectorCount:N0} sectors; volume '{inspection.VolumeIdentifier}'; " +
                 $"{normalFiles:N0} ISO files, {special:N0} special/hash-only entries, {inspection.HashEntryCount:N0} manifest hashes." +
-                manifestWarningSummary;
-            SkeletonProgressText.Text = hasManifestWarnings ? "Loaded with warning" : "Loaded";
+                manifestWarningSummary + neroWarningSummary;
+            SkeletonProgressText.Text = hasManifestWarnings || hasNeroNriWarnings ? "Loaded with warning" : "Loaded";
             AppendSkeletonLog($"Detected {kind}.");
             AppendSkeletonLog($"ISO9660 volume: {inspection.VolumeIdentifier}");
             AppendSkeletonLog($"ISO files: {normalFiles:N0}; manifest entries: {inspection.HashEntryCount:N0}; unmapped hashes: {inspection.UnmappedHashEntryCount:N0}.");
+            if (inspection.NeroSystemAreaRecovery is { } nero)
+            {
+                AppendSkeletonLog(
+                    $"NERO SYSTEM_AREA: hidden project {nero.ProjectFileName} detected at LBA {nero.ProjectExtentLba:N0} " +
+                    $"({nero.ProjectDataLength:N0} bytes, {nero.NeroIsoSignature}). Its missing four-byte system-area value will be recovered during resurrection.");
+            }
+            foreach (string warning in inspection.NeroNriWarnings)
+                AppendSkeletonLog("WARNING — NERO NRI: " + warning);
 
             if (inspection.MissingHashEntryCount > 0)
             {
@@ -178,26 +221,35 @@ public partial class MainWindow : Window
                     AppendSkeletonLog($"  ...and {ignoredEntries.Length - 100:N0} more.");
             }
 
-            if (hasManifestWarnings)
+            if (hasManifestWarnings || hasNeroNriWarnings)
             {
-                string warning = inspection.MissingHashEntryCount > 0 && inspection.UnmappedHashEntryCount > 0
+                string? manifestWarning = inspection.MissingHashEntryCount > 0 && inspection.UnmappedHashEntryCount > 0
                     ? $"The .hash file is missing entries for {inspection.MissingHashEntryCount:N0} file(s) listed in the skeleton and contains {inspection.UnmappedHashEntryCount:N0} unused entry/entries. The unused entries will be ignored."
                     : inspection.MissingHashEntryCount > 0
                         ? $"The .hash file is missing entries for {inspection.MissingHashEntryCount:N0} file(s) listed in the skeleton. Those files cannot be matched."
-                        : $"The .hash file contains {inspection.UnmappedHashEntryCount:N0} entry/entries that are not used by the skeleton. They will be ignored.";
+                        : inspection.UnmappedHashEntryCount > 0
+                            ? $"The .hash file contains {inspection.UnmappedHashEntryCount:N0} entry/entries that are not used by the skeleton. They will be ignored."
+                            : null;
+
+                var warningParts = new List<string>();
+                if (manifestWarning is not null)
+                    warningParts.Add(manifestWarning);
+                warningParts.AddRange(inspection.NeroNriWarnings);
 
                 await ShowMessageAsync(
                     "DumpToolbox — SkeleTool warning",
-                    warning + " See the activity log for the affected paths.");
+                    string.Join("\n\n", warningParts) + "\n\nSee the activity log for the affected paths.");
             }
         }
         catch (OperationCanceledException)
         {
+            SkeletonProgressBar.IsIndeterminate = false;
             AppendSkeletonLog("Load cancelled.");
             SkeletonProgressText.Text = "Cancelled";
         }
         catch (Exception ex)
         {
+            SkeletonProgressBar.IsIndeterminate = false;
             AppendSkeletonLog($"ERROR: {ex.Message}");
             SkeletonProgressText.Text = "Error";
             await ShowMessageAsync("DumpToolbox — Skeletool", ex.Message);
@@ -244,6 +296,9 @@ public partial class MainWindow : Window
                 lastFilesSkipped = p.FilesSkipped;
                 SkeletonProgressText.Text = $"{p.FilesProcessed:N0}/{p.FilesTotal:N0}  hashed {p.FilesHashed:N0}  cached {p.FilesCached:N0}  skipped {p.FilesSkipped:N0}  {speed:N1} MiB/s";
                 SetWindowStatus($"Skeletool — hashing {p.FilesProcessed}/{p.FilesTotal}");
+
+                if (!string.IsNullOrWhiteSpace(p.DetectedNeroProject))
+                    AppendSkeletonLog("NERO NRI: " + p.DetectedNeroProject);
 
                 if (!string.IsNullOrWhiteSpace(p.MatchedEntryPath) &&
                     _skeletonNodes.TryGetValue(p.MatchedEntryPath, out SkeletonTreeNode? node))
@@ -309,6 +364,8 @@ public partial class MainWindow : Window
             {
                 SkeletonProgressBar.Value = p.Fraction * 100;
                 SkeletonProgressText.Text = $"{p.FilesProcessed:N0}/{p.FilesTotal:N0} files";
+                if (!string.IsNullOrWhiteSpace(p.DetectedNeroProject))
+                    AppendSkeletonLog("NERO NRI: " + p.DetectedNeroProject);
             });
             IReadOnlyDictionary<string, SkeletonSourceMatch> found = await _skeletonService.MatchSourceImageAsync(
                 _skeletonInspection, image, false, progress, _skeletonCts.Token);
@@ -403,10 +460,14 @@ public partial class MainWindow : Window
     }
 
     private static int CountSkeletonRequiredMatches(SkeletonInspectionResult inspection)
-        => inspection.Entries.Count(e => e.CanRestore && !e.IsEmpty &&
+    {
+        bool neroSystemAreaIsGenerated = SkeletonResurrectionService.CanRecoverNeroSystemArea(inspection);
+        return inspection.Entries.Count(e => e.CanRestore && !e.IsEmpty &&
             !(e.SpecialKind == SkeletonSpecialKind.SystemArea &&
-              string.Equals(e.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase)) &&
+              (string.Equals(e.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
+               neroSystemAreaIsGenerated)) &&
             (!string.IsNullOrWhiteSpace(e.Sha1) || !string.IsNullOrWhiteSpace(e.XaSha1)));
+    }
 
     private async void SkeletonResurrectButton_Click(object? sender, RoutedEventArgs e)
     {
@@ -454,15 +515,33 @@ public partial class MainWindow : Window
                     resurrectionMatches, activity, _skeletonCts.Token);
             }
 
-            SkeletonResurrectionResult result = await _skeletonService.ResurrectAsync(
-                _skeletonInspection,
-                resurrectionMatches,
-                output,
-                allowMissing,
-                progress,
-                activity,
-                _skeletonCts.Token,
-                ResolveEofSlackAmbiguityAsync);
+            NeroRecoveryDialogState? neroDialog = null;
+            IProgress<NeroSystemAreaRecoveryProgress>? neroProgress = null;
+            if (SkeletonResurrectionService.CanRecoverNeroSystemArea(_skeletonInspection) &&
+                !resurrectionMatches.ContainsKey("SYSTEM_AREA"))
+            {
+                neroDialog = ShowNeroRecoveryDialog(_skeletonInspection.NeroSystemAreaRecovery!);
+                neroProgress = new Progress<NeroSystemAreaRecoveryProgress>(p => UpdateNeroRecoveryDialog(neroDialog, p));
+            }
+
+            SkeletonResurrectionResult result;
+            try
+            {
+                result = await _skeletonService.ResurrectAsync(
+                    _skeletonInspection,
+                    resurrectionMatches,
+                    output,
+                    allowMissing,
+                    progress,
+                    activity,
+                    _skeletonCts.Token,
+                    ResolveEofSlackAmbiguityAsync,
+                    neroProgress);
+            }
+            finally
+            {
+                CloseNeroRecoveryDialog(neroDialog);
+            }
 
             stopwatch.Stop();
             SkeletonProgressBar.Value = 100;
@@ -527,6 +606,11 @@ public partial class MainWindow : Window
             _skeletonNodes[entry.Path] = fileNode;
         }
 
+        // Keep directory branches together instead of interleaving them with root
+        // files according to the full ISO path. Apply the same folders-first order
+        // recursively within every directory.
+        SortSkeletonTreeNodes(_skeletonTreeRoots);
+
         SkeletonContentEntry[] special = inspection.Entries.Where(e => e.SpecialKind != SkeletonSpecialKind.None).ToArray();
         if (special.Length > 0)
         {
@@ -535,11 +619,32 @@ public partial class MainWindow : Window
             {
                 var node = new SkeletonTreeNode(entry.Path, entry);
                 SetInitialSkeletonNodeStatus(node, entry);
+                if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
+                    SkeletonResurrectionService.CanRecoverNeroSystemArea(inspection))
+                {
+                    node.Status = "NRI";
+                    node.SourcePath = $"Will generate from {inspection.NeroSystemAreaRecovery!.ProjectFileName}";
+                }
                 specialRoot.Children.Add(node);
                 _skeletonNodes[entry.Path] = node;
             }
             _skeletonTreeRoots.Add(specialRoot);
         }
+    }
+
+    private static void SortSkeletonTreeNodes(ObservableCollection<SkeletonTreeNode> nodes)
+    {
+        SkeletonTreeNode[] ordered = nodes
+            .OrderBy(node => node.IsFolder ? 0 : 1)
+            .ThenBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (SkeletonTreeNode folder in ordered.Where(node => node.IsFolder))
+            SortSkeletonTreeNodes(folder.Children);
+
+        nodes.Clear();
+        foreach (SkeletonTreeNode node in ordered)
+            nodes.Add(node);
     }
 
     private static void SetInitialSkeletonNodeStatus(SkeletonTreeNode node, SkeletonContentEntry entry)
@@ -584,13 +689,146 @@ public partial class MainWindow : Window
             }
             else if (entry.CanRestore && !entry.IsEmpty &&
                      !(entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                       string.Equals(entry.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase)) &&
+                       (string.Equals(entry.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
+                        SkeletonResurrectionService.CanRecoverNeroSystemArea(_skeletonInspection))) &&
                      (!string.IsNullOrWhiteSpace(entry.Sha1) || !string.IsNullOrWhiteSpace(entry.XaSha1)))
             {
                 node.Status = "✗";
                 node.SourcePath = null;
             }
+            else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
+                     SkeletonResurrectionService.CanRecoverNeroSystemArea(_skeletonInspection))
+            {
+                node.Status = "NRI";
+                node.SourcePath = $"Will generate from {_skeletonInspection.NeroSystemAreaRecovery!.ProjectFileName}";
+            }
         }
+    }
+
+    private sealed class NeroRecoveryDialogState
+    {
+        public NeroRecoveryDialogState(Window window, ProgressBar progressBar, TextBlock status, TextBlock details, Button cancelButton)
+        {
+            Window = window;
+            ProgressBar = progressBar;
+            Status = status;
+            Details = details;
+            CancelButton = cancelButton;
+        }
+
+        public Window Window { get; }
+        public ProgressBar ProgressBar { get; }
+        public TextBlock Status { get; }
+        public TextBlock Details { get; }
+        public Button CancelButton { get; }
+        public bool ClosingProgrammatically { get; set; }
+    }
+
+    private NeroRecoveryDialogState ShowNeroRecoveryDialog(NeroSystemAreaRecoveryInfo info)
+    {
+        var progressBar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 18 };
+        var status = new TextBlock
+        {
+            Text = "Preparing the four-byte search…",
+            FontWeight = FontWeight.SemiBold,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap
+        };
+        var details = new TextBlock
+        {
+            Text = "This may take several minutes. DumpToolbox will use the available CPU cores while keeping one logical processor free for the interface.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap
+        };
+        var cancel = new Button
+        {
+            Content = "Cancel",
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            MinWidth = 90
+        };
+        var dialog = new Window
+        {
+            Title = "Recovering Nero system area",
+            Width = 620,
+            MinHeight = 260,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 14,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"Hidden Nero project: {info.ProjectFileName}  •  LBA {info.ProjectExtentLba:N0}  •  {info.ProjectDataLength:N0} bytes",
+                        TextWrapping = Avalonia.Media.TextWrapping.Wrap
+                    },
+                    new TextBlock
+                    {
+                        Text = "The skeleton identifies 28 bytes of Nero's 32-byte system-area record. The manifest SHA-1 is being used to recover the remaining four private bytes.",
+                        TextWrapping = Avalonia.Media.TextWrapping.Wrap
+                    },
+                    progressBar,
+                    status,
+                    details,
+                    cancel
+                }
+            }
+        };
+
+        var state = new NeroRecoveryDialogState(dialog, progressBar, status, details, cancel);
+        ApplyThemeClassToWindow(dialog);
+        cancel.Click += (_, _) =>
+        {
+            cancel.IsEnabled = false;
+            status.Text = "Cancelling…";
+            _skeletonCts?.Cancel();
+        };
+        dialog.Closed += (_, _) =>
+        {
+            if (!state.ClosingProgrammatically)
+                _skeletonCts?.Cancel();
+        };
+        _ = dialog.ShowDialog(this);
+        return state;
+    }
+
+    private void UpdateNeroRecoveryDialog(
+        NeroRecoveryDialogState state,
+        NeroSystemAreaRecoveryProgress progress)
+    {
+        if (state.ClosingProgrammatically)
+            return;
+
+        state.ProgressBar.Value = progress.Fraction * 100;
+        double rate = progress.CandidatesPerSecond;
+        state.Status.Text = progress.PrivateValue is uint value
+            ? $"Recovered private bytes {value:X8}; SHA-1 matched."
+            : $"{progress.Fraction:P1} — {progress.CandidatesTested:N0} of {progress.TotalCandidates:N0} candidates tested";
+
+        if (progress.PrivateValue is not null)
+        {
+            state.Details.Text = $"Completed in {progress.Elapsed:g}. Resurrection will now continue.";
+            CloseNeroRecoveryDialog(state);
+            return;
+        }
+
+        if (rate > 0)
+        {
+            double secondsRemaining = (progress.TotalCandidates - progress.CandidatesTested) / rate;
+            TimeSpan remaining = TimeSpan.FromSeconds(Math.Min(secondsRemaining, TimeSpan.MaxValue.TotalSeconds));
+            state.Details.Text = $"{rate / 1_000_000:N2} million candidates/second • worst-case remaining {remaining:g}";
+        }
+        SetWindowStatus($"Skeletool — recovering Nero system area {progress.Fraction:P0}");
+    }
+
+    private static void CloseNeroRecoveryDialog(NeroRecoveryDialogState? state)
+    {
+        if (state is null || state.ClosingProgrammatically)
+            return;
+
+        state.ClosingProgrammatically = true;
+        state.Window.Close();
     }
 
     private void SetSkeletonRunning(bool running)

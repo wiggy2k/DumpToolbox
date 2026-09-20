@@ -31,7 +31,10 @@ public sealed record DicDonorFile(
     int DirectoryRecordIndex = -1,
     int DirectoryRecordLength = 0,
     int IdentifierLength = 0,
-    byte? IdentifierPaddingValue = null)
+    byte? IdentifierPaddingValue = null,
+    bool IsEmbeddedNeroProject = false,
+    string? NeroIsoSignature = null,
+    string? NeroDirectoryNamespaces = null)
 {
     public bool IsAssociated => (FileFlags & 0x04) != 0;
     public bool IsDirectory => (FileFlags & 0x02) != 0;
@@ -146,7 +149,7 @@ public sealed partial class DicDonorImageService
         // ISO9660 path. Associated and colliding records stay in the private manifest area.
         var normalWinner = new HashSet<DicDonorFile>();
         foreach (IGrouping<string, DicDonorFile> group in fileRecords
-                     .Where(file => !file.IsAssociated)
+                     .Where(file => !file.IsAssociated && !file.IsEmbeddedNeroProject)
                      .GroupBy(file => NormalizePath(jolietByPrimary.TryGetValue(file, out DicDonorFile? joliet) ? joliet.Path : file.Path), StringComparer.OrdinalIgnoreCase))
         {
             DicDonorFile? visible = group.FirstOrDefault();
@@ -155,7 +158,8 @@ public sealed partial class DicDonorImageService
         }
 
         int associatedCount = fileRecords.Count(file => file.IsAssociated);
-        int duplicateRecords = fileRecords.Length - normalWinner.Count - associatedCount;
+        int neroProjectCount = fileRecords.Count(file => file.IsEmbeddedNeroProject);
+        int duplicateRecords = fileRecords.Length - normalWinner.Count - associatedCount - neroProjectCount;
 
         var manifest = new IsoExtractionManifest
         {
@@ -175,7 +179,9 @@ public sealed partial class DicDonorImageService
             jolietByPrimary.TryGetValue(file, out DicDonorFile? jolietRecord);
             bool normalPath = normalWinner.Contains(file) && !file.IsAssociated;
             string visiblePath = jolietRecord?.Path ?? file.Path;
-            string relativePath = normalPath
+            string relativePath = file.IsEmbeddedNeroProject
+                ? BuildPrivateNeroExtractionPath(file)
+                : normalPath
                 ? BuildFilesystemExtractionPath(visiblePath)
                 : BuildPrivateExtractionPath(file);
             string destination = Path.Combine(root, relativePath);
@@ -198,8 +204,43 @@ public sealed partial class DicDonorImageService
                 ExtendedAttributeRecordLength = file.ExtendedAttributeRecordLength,
                 FileUnitSize = file.FileUnitSize,
                 InterleaveGapSize = file.InterleaveGapSize,
-                Extents = (file.Extents ?? Array.Empty<DicDonorExtent>()).ToList()
+                Extents = (file.Extents ?? Array.Empty<DicDonorExtent>()).ToList(),
+                IsEmbeddedNeroProject = file.IsEmbeddedNeroProject,
+                NeroIsoSignature = file.NeroIsoSignature,
+                NeroDirectoryNamespaces = file.NeroDirectoryNamespaces
             });
+
+            if (file.IsEmbeddedNeroProject && file.NeroIsoSignature is { } neroSignature)
+            {
+                string sha1;
+                await using (FileStream extractedNri = new(
+                    destination,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    64 * 1024,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan))
+                {
+                    sha1 = Convert.ToHexString(
+                        await SHA1.HashDataAsync(extractedNri, cancellationToken).ConfigureAwait(false))
+                        .ToLowerInvariant();
+                }
+
+                NeroNriDetector.SystemAreaRecord? systemArea = filesystem.NeroSystemAreaRecord;
+                bool matchingSystemArea = systemArea is not null &&
+                    systemArea.FileName.Equals(Path.GetFileName(file.Path), StringComparison.OrdinalIgnoreCase) &&
+                    systemArea.ExtentLba == file.ExtentLba &&
+                    systemArea.DataLength == file.DataLength;
+                manifest.NeroProjects.Add(new NeroNriProjectInfo(
+                    Path.GetFileName(file.Path),
+                    file.ExtentLba,
+                    checked((uint)file.DataLength),
+                    neroSignature,
+                    sha1,
+                    matchingSystemArea,
+                    matchingSystemArea ? systemArea!.PrivateValue : null,
+                    file.NeroDirectoryNamespaces ?? "ISO9660"));
+            }
             extracted++;
             progress?.Report(new DicDonorProgress(i + 1, Math.Max(1, fileRecords.Length), $"Extracting filesystem records — {i + 1:N0}/{fileRecords.Length:N0}"));
         }
@@ -210,6 +251,22 @@ public sealed partial class DicDonorImageService
             warnings.Add($"Preserved {associatedCount:N0} ISO9660 Associated File record(s) under '{IsoExtractionManifestService.PrivateDirectoryName}'. They are linked to their original primary/Joliet identity and extent by the manifest and should not be renamed.");
         if (duplicateRecords > 0)
             warnings.Add($"Preserved {duplicateRecords:N0} additional colliding filesystem record(s) in the private record area instead of allowing the host filesystem to collapse them.");
+        if (manifest.NeroProjects.Count > 0)
+            warnings.Add($"Detected and preserved {manifest.NeroProjects.Count:N0} hidden Nero NRI project file(s), including their NeroISO signatures and source sectors.");
+        foreach (NeroNriPayloadRequirement requirement in filesystem.NeroProjectRequirements)
+        {
+            bool present = manifest.NeroProjects.Any(project =>
+                project.FileName.Equals(requirement.FileName, StringComparison.OrdinalIgnoreCase) &&
+                project.ExtentLba == requirement.ExtentLba &&
+                project.DataLength == requirement.DataLength);
+            if (!present)
+            {
+                warnings.Add(
+                    $"{requirement.Evidence} requires Nero project '{requirement.FileName}' at LBA {requirement.ExtentLba:N0} " +
+                    $"({requirement.DataLength:N0} bytes), but this image does not contain a valid length-prefixed NeroISO payload there. " +
+                    "The NRI file cannot be extracted or generated; supply an exact source image or NRI file.");
+            }
+        }
         if (image.SectorSize == CookedSectorSize)
             warnings.Add("This extraction came from a 2048-byte cooked ISO. It can supply ordinary/Form-1 filesystem payloads, but it cannot supply full 2324-byte Mode 2 Form 2 payloads if the DIC logs require them.");
 
@@ -229,6 +286,7 @@ public sealed partial class DicDonorImageService
             filesystem.HasJoliet,
             jolietByPrimary.Count,
             false,
+            manifest.NeroProjects,
         warnings);
     }
 
@@ -252,11 +310,21 @@ public sealed partial class DicDonorImageService
         return Path.Combine(IsoExtractionManifestService.PrivateDirectoryName, "files", fileName);
     }
 
+    private static string BuildPrivateNeroExtractionPath(DicDonorFile file)
+    {
+        string name = SanitizeHostName(Path.GetFileName(NormalizePath(file.Path)));
+        return Path.Combine(
+            IsoExtractionManifestService.PrivateDirectoryName,
+            "nero",
+            $"LBA_{file.ExtentLba:D8}_{name}");
+    }
+
     private static DicDonorFile? FindUnambiguousJolietRecord(
         DicDonorFile primary,
         IReadOnlyList<DicDonorFile> jolietFiles)
     {
         DicDonorFile[] candidates = jolietFiles
+            .Where(candidate => candidate.IsEmbeddedNeroProject == primary.IsEmbeddedNeroProject)
             .Where(candidate => candidate.IsAssociated == primary.IsAssociated)
             .Where(candidate => candidate.IsDirectory == primary.IsDirectory)
             .Where(candidate => candidate.ExtentLba == primary.ExtentLba)

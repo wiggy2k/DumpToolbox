@@ -17,6 +17,19 @@ public sealed partial class SkeletonResurrectionService
         string hashPath,
         CancellationToken cancellationToken = default)
     {
+        return await InspectAsync(
+            skeletonPath,
+            hashPath,
+            preparationProgress: null,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<SkeletonInspectionResult> InspectAsync(
+        string skeletonPath,
+        string hashPath,
+        IProgress<SkeletonInputPreparationProgress>? preparationProgress,
+        CancellationToken cancellationToken = default)
+    {
         if (string.IsNullOrWhiteSpace(skeletonPath))
             throw new ArgumentException("Choose a skeleton file.", nameof(skeletonPath));
         if (string.IsNullOrWhiteSpace(hashPath))
@@ -29,11 +42,16 @@ public sealed partial class SkeletonResurrectionService
         if (!File.Exists(hash))
             throw new FileNotFoundException("Hash file not found.", hash);
 
+        PreparedSkeletonInput prepared = await SkeletonInputMaterializer.PrepareAsync(
+            skeleton,
+            preparationProgress,
+            cancellationToken).ConfigureAwait(false);
+
         IReadOnlyList<HashManifestEntry> manifest = await ReadHashManifestAsync(hash, cancellationToken);
         if (manifest.Count == 0)
             throw new InvalidOperationException("The hash file does not contain any valid SHA1/path entries.");
 
-        await using var reader = await SkeletonImageReader.OpenAsync(skeleton, cancellationToken);
+        await using var reader = await SkeletonImageReader.OpenAsync(prepared.Path, cancellationToken);
         IsoTree isoTree = await ReadIsoTreeAsync(reader, cancellationToken);
 
         var byPath = new Dictionary<string, EntryBuilder>(StringComparer.OrdinalIgnoreCase);
@@ -128,6 +146,68 @@ public sealed partial class SkeletonResurrectionService
             .ThenBy(e => e.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        NeroSystemAreaRecoveryInfo? neroSystemAreaRecovery = null;
+        var neroRequirements = isoTree.NeroProjectRequirements.ToList();
+        try
+        {
+            byte[] sector15 = await reader.ReadForm1SectorAsync(
+                reader.BaseLba + SystemAreaSectors - 1,
+                cancellationToken).ConfigureAwait(false);
+            if (NeroNriDetector.TryParseSystemAreaRecord(
+                    sector15,
+                    out NeroNriDetector.SystemAreaRecord? systemAreaRecord) &&
+                systemAreaRecord is not null &&
+                !neroRequirements.Any(requirement =>
+                    requirement.FileName.Equals(systemAreaRecord.FileName, StringComparison.OrdinalIgnoreCase) &&
+                    requirement.ExtentLba == systemAreaRecord.ExtentLba &&
+                    requirement.DataLength == systemAreaRecord.DataLength))
+            {
+                neroRequirements.Add(new NeroNriPayloadRequirement(
+                    systemAreaRecord.FileName,
+                    systemAreaRecord.ExtentLba,
+                    systemAreaRecord.DataLength,
+                    "valid Nero sector-15 record"));
+            }
+        }
+        catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException)
+        {
+            // An unreadable system-area sector is not Nero evidence by itself.
+        }
+
+        var neroNriWarnings = new List<string>();
+        foreach (NeroNriPayloadRequirement requirement in neroRequirements
+                     .DistinctBy(item => (item.FileName.ToUpperInvariant(), item.ExtentLba, item.DataLength)))
+        {
+            bool payloadPresent = isoTree.NeroProjects.Any(project =>
+                project.FileName.Equals(requirement.FileName, StringComparison.OrdinalIgnoreCase) &&
+                project.Lba == requirement.ExtentLba &&
+                project.DataLength == requirement.DataLength);
+            if (!payloadPresent)
+                payloadPresent = await HasNeroPayloadSignatureAsync(reader, requirement, cancellationToken).ConfigureAwait(false);
+
+            if (!payloadPresent)
+            {
+                neroNriWarnings.Add(
+                    $"{requirement.Evidence} requires Nero project '{requirement.FileName}' at LBA {requirement.ExtentLba:N0} " +
+                    $"({requirement.DataLength:N0} bytes), but the skeleton does not contain a valid length-prefixed NeroISO payload there. " +
+                    "The NRI payload cannot be generated; supply an exact source image or NRI file.");
+            }
+        }
+
+        SkeletonContentEntry? systemArea = entries.FirstOrDefault(entry => entry.SpecialKind == SkeletonSpecialKind.SystemArea);
+        if (systemArea?.Sha1 is { Length: 40 } expectedSystemAreaSha1 &&
+            !expectedSystemAreaSha1.Equals(ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) &&
+            isoTree.NeroProject is { } neroProject &&
+            await IsLogicalSystemAreaZeroAsync(reader, cancellationToken))
+        {
+            neroSystemAreaRecovery = new NeroSystemAreaRecoveryInfo(
+                neroProject.FileName,
+                neroProject.Lba,
+                neroProject.DataLength,
+                neroProject.Signature,
+                expectedSystemAreaSha1.ToLowerInvariant());
+        }
+
         return new SkeletonInspectionResult(
             skeleton,
             hash,
@@ -140,8 +220,52 @@ public sealed partial class SkeletonResurrectionService
             manifest.Count,
             unmapped.Count)
         {
-            FilesMissingFromHashManifest = filesMissingFromHashManifest
+            MaterializedSkeletonPath = prepared.WasMaterialized ? prepared.Path : null,
+            SkeletonInputFormat = prepared.Format,
+            FilesMissingFromHashManifest = filesMissingFromHashManifest,
+            NeroSystemAreaRecovery = neroSystemAreaRecovery,
+            NeroNriWarnings = neroNriWarnings
         };
+    }
+
+    private static async Task<bool> HasNeroPayloadSignatureAsync(
+        SkeletonImageReader image,
+        NeroNriPayloadRequirement requirement,
+        CancellationToken cancellationToken)
+    {
+        if (requirement.DataLength < 8 ||
+            requirement.ExtentLba < image.BaseLba ||
+            requirement.ExtentLba >= image.BaseLba + image.SectorCount)
+        {
+            return false;
+        }
+
+        try
+        {
+            byte[] header = await image.ReadForm1BytesAsync(
+                requirement.ExtentLba,
+                Math.Min(requirement.DataLength, 256u),
+                cancellationToken).ConfigureAwait(false);
+            return NeroNriDetector.TryReadPayloadSignature(header, out _);
+        }
+        catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> IsLogicalSystemAreaZeroAsync(
+        SkeletonImageReader image,
+        CancellationToken cancellationToken)
+    {
+        for (int sector = 0; sector < SystemAreaSectors; sector++)
+        {
+            byte[] payload = await image.ReadForm1SectorAsync(image.BaseLba + sector, cancellationToken);
+            if (payload.Any(value => value != 0))
+                return false;
+        }
+
+        return true;
     }
 
     internal static IReadOnlyList<string> FindFilesMissingFromHashManifest(

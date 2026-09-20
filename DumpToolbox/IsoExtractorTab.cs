@@ -94,6 +94,15 @@ public partial class MainWindow
                     : "Visible namespace: primary ISO9660 (no Joliet SVD detected).");
             AppendIsoExtractorLog($"Associated records preserved: {result.AssociatedFilesExtracted:N0}.");
             AppendIsoExtractorLog($"Additional colliding records preserved: {result.DuplicateRecordsPreserved:N0}.");
+            foreach (NeroNriProjectInfo project in result.NeroProjects)
+            {
+                string systemArea = project.HasMatchingSystemAreaRecord
+                    ? $"; matching sector-15 record, private bytes {project.SystemAreaPrivateValue:X8}"
+                    : "; no matching sector-15 record";
+                AppendIsoExtractorLog(
+                    $"Nero NRI: {project.FileName}; {project.NeroIsoSignature}; {project.DirectoryNamespaces}; LBA {project.ExtentLba:N0}; " +
+                    $"{project.DataLength:N0} bytes; SHA-1 {project.Sha1}{systemArea}.");
+            }
             AppendIsoExtractorLog($"Manifest: {result.ManifestPath}");
             foreach (string warning in result.Warnings)
                 AppendIsoExtractorLog("WARNING: " + warning);

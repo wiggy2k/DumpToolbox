@@ -5,7 +5,7 @@ namespace DumpToolbox.Core;
 
 public sealed class IsoExtractionManifest
 {
-    public int Version { get; set; } = 3;
+    public int Version { get; set; } = 4;
     public string Format { get; set; } = "DICRecovery ISO Extraction";
     public string SourceImageName { get; set; } = string.Empty;
     public int SourceSectorSize { get; set; }
@@ -16,6 +16,7 @@ public sealed class IsoExtractionManifest
     public bool HasUdf { get; set; }
     public string VisibleNamespace { get; set; } = "ISO9660";
     public List<IsoExtractionManifestFile> Files { get; set; } = new();
+    public List<NeroNriProjectInfo> NeroProjects { get; set; } = new();
 }
 
 public sealed class IsoExtractionManifestFile
@@ -42,6 +43,9 @@ public sealed class IsoExtractionManifestFile
     public int FileUnitSize { get; set; }
     public int InterleaveGapSize { get; set; }
     public List<DicDonorExtent> Extents { get; set; } = new();
+    public bool IsEmbeddedNeroProject { get; set; }
+    public string? NeroIsoSignature { get; set; }
+    public string? NeroDirectoryNamespaces { get; set; }
 
     public bool IsAssociated => (FileFlags & 0x04) != 0;
 }
@@ -64,9 +68,9 @@ public static class IsoExtractionManifestService
         {
             string json = File.ReadAllText(path);
             IsoExtractionManifest? manifest = JsonSerializer.Deserialize<IsoExtractionManifest>(json);
-            // v1 manifests remain valid payload catalogues. v2 adds Joliet evidence;
-            // v3 adds UDF-only source identity without changing ISO/Joliet fields.
-            return manifest is { Version: 1 or 2 or 3 } ? manifest : null;
+            // v1 manifests remain valid payload catalogues. v2 adds Joliet evidence,
+            // v3 adds UDF-only identity, and v4 records hidden Nero NRI projects.
+            return manifest is { Version: 1 or 2 or 3 or 4 } ? manifest : null;
         }
         catch
         {
@@ -130,7 +134,7 @@ public static class IsoExtractionManifestService
     private static byte[] ReadPrimaryVolumeDescriptor(SkeletonInspectionResult inspection)
     {
         const int pvdLba = 16;
-        using var stream = new FileStream(inspection.SkeletonPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var stream = new FileStream(inspection.EffectiveSkeletonPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         byte[] payload = new byte[SkeletonResurrectionService.CookedSectorSize];
         if (inspection.ImageKind == SkeletonImageKind.Cooked2048)
         {
@@ -196,4 +200,5 @@ public sealed record IsoExtractionResult(
     bool HasJoliet,
     int JolietMappedRecords,
     bool HasUdf,
+    IReadOnlyList<NeroNriProjectInfo> NeroProjects,
     IReadOnlyList<string> Warnings);

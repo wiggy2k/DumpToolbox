@@ -26,6 +26,7 @@ Choose any companion log and DumpToolbox discovers the related files.
 The logged primary ISO9660 structure remains authoritative. Source matching requires exact logical size and a conservative identity:
 
 - exact primary path/name first;
+- for CeQuadrat/WinOnCD only, a literal path that is also a plausible numeric-alias collision wins the tie only when every competing same-size payload is byte-identical;
 - validated Joliet-to-primary projection when it is unique;
 - ISO Extractor manifest identity for associated or colliding records;
 - donor primary/Joliet evidence only under its stricter donor rules.
@@ -43,6 +44,8 @@ UDF VAT/VDS history is intentionally not folded into logical file SHA-1 matching
 
 Optional exactness regions—such as unproven system area, file-tail slack or missing metadata—remain zero-filled in a best-effort rebuild unless an exact same-disc donor supplies them. Raw-only anomalies require a 2352-byte donor; a cooked donor cannot provide Mode 2 Form 2 payload bytes or malformed raw framing.
 
+Nero masters are a special case. When exact `*_mainInfo.txt` directory-sector bytes contain Nero's embedded hidden `!!MSxxxx.NRI` record, DIC recovery recognises the project even though `*_volDesc.txt` does not list it as a normal file. If drive-offset evidence preserved the four private system-area bytes, they are used directly. Otherwise, once all required file payloads are present, DumpToolbox reconstructs the 32-byte sector-15 Nero record and solves the four bytes from the original whole-image CRC32. The candidate is committed only when the available DIC MD5/SHA-1 also matches; partial recovery cannot use the four bytes to compensate for unrelated missing data. Raw BIN reconstruction regenerates the affected EDC/ECC fields while preserving the logged sector framing.
+
 ## Sector evidence
 
 EccEdc records are indexed by physical order while their printed/header LBA is retained as separate evidence. Logged MSF, mode, XA copies, Mode 0, audio, fill recipes and known protection faults are preserved when positively identified. Unknown corruption is not guessed.
@@ -52,6 +55,6 @@ Exact raw-sector overrides and deterministic fill recipes take precedence over i
 ## Runtime reconstruction rules
 
 - `EOFSlackRules.ini` contains mastering-specific post-EOF residue-copy rules. `ApplyMode=Direct` is reserved for fully reproduced observations; `ApplyMode=HashTrial` tests the zero-filled baseline and matching residue candidates only when an expected whole-image hash is available. No verified match leaves normal zero-filled slack.
-- `JolietNamingRules.ini` contains mastering-specific Joliet-to-primary naming profiles. Profiles can also select file versioning (`Version1` or `None`), directory-record ordering, path-table ordering, and the safety-gated `OpaqueTildeAlias`/`HexOrdinalAlias` families; generic conservative projection remains the fallback.
+- `JolietNamingRules.ini` contains mastering-specific Joliet-to-primary naming profiles. Profiles can also select file versioning (`Version1` or `None`), directory-record ordering, path-table ordering, and the safety-gated `OpaqueTildeAlias`/`HexOrdinalAlias` families. Opaque tilde aliases are considered only after exact and deterministic projections find no candidate; generic conservative projection remains the fallback when no mastering profile matches.
 - Deleting either file causes current defaults to be recreated on next use. Existing files are not overwritten automatically.
 - ISOCD/Pantaray FS/TM payload repair is shared with SkeleTool and never overwrites conflicting non-zero bytes.

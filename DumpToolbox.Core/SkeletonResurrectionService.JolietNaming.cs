@@ -236,7 +236,7 @@ public sealed partial class SkeletonResurrectionService
     {
         try
         {
-            using var stream = new FileStream(inspection.SkeletonPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var stream = new FileStream(inspection.EffectiveSkeletonPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             for (int descriptor = 16; descriptor < 32; descriptor++)
             {
                 long physicalLba = inspection.BaseLba + descriptor;
@@ -356,6 +356,18 @@ public sealed partial class SkeletonResurrectionService
     internal static bool DonorJolietPathProjectsToIsoPath(string jolietRelativePath, string isoRelativePath, JolietNamingProfile? profile)
         => JolietPathProjectsToIsoPath(jolietRelativePath, isoRelativePath, profile);
 
+    internal static bool DonorJolietPathProjectsToIsoPath(
+        string jolietRelativePath,
+        string isoRelativePath,
+        JolietNamingProfile? profile,
+        bool allowOpaqueTildeAlias)
+        => JolietPathProjectsToIsoPath(
+            jolietRelativePath,
+            isoRelativePath,
+            profile,
+            terminalIsFile: true,
+            allowOpaqueTildeAlias: allowOpaqueTildeAlias);
+
     internal static bool DonorJolietPathMatchesIsoCollisionAlias(string jolietRelativePath, string isoRelativePath)
         => JolietPathMatchesIsoCollisionAlias(jolietRelativePath, isoRelativePath);
 
@@ -365,6 +377,19 @@ public sealed partial class SkeletonResurrectionService
         bool terminalIsDirectory,
         JolietNamingProfile? profile)
         => JolietPathProjectsToIsoPath(jolietRelativePath, isoRelativePath, profile, !terminalIsDirectory);
+
+    internal static bool EvidenceJolietPathProjectsToIsoPath(
+        string jolietRelativePath,
+        string isoRelativePath,
+        bool terminalIsDirectory,
+        JolietNamingProfile? profile,
+        bool allowOpaqueTildeAlias)
+        => JolietPathProjectsToIsoPath(
+            jolietRelativePath,
+            isoRelativePath,
+            profile,
+            !terminalIsDirectory,
+            allowOpaqueTildeAlias);
 
     private static bool JolietPathProjectsToIsoPath(string jolietRelativePath, string isoRelativePath)
         => JolietPathProjectsToIsoPath(jolietRelativePath, isoRelativePath, null);
@@ -376,7 +401,8 @@ public sealed partial class SkeletonResurrectionService
         string jolietRelativePath,
         string isoRelativePath,
         JolietNamingProfile? profile,
-        bool terminalIsFile)
+        bool terminalIsFile,
+        bool allowOpaqueTildeAlias = true)
     {
         string[] joliet = NormalizeDicRelativePath(jolietRelativePath)
             .Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -389,7 +415,8 @@ public sealed partial class SkeletonResurrectionService
         for (int i = 0; i < joliet.Length; i++)
         {
             bool isFile = terminalIsFile && i == joliet.Length - 1;
-            if (!JolietComponentProjectsToIsoComponent(joliet[i], iso[i], isFile, profile))
+            if (!JolietComponentProjectsToIsoComponent(
+                    joliet[i], iso[i], isFile, profile, allowOpaqueTildeAlias))
                 return false;
         }
 
@@ -483,7 +510,12 @@ public sealed partial class SkeletonResurrectionService
     private static bool JolietComponentProjectsToIsoComponent(string jolietComponent, string isoComponent, bool isFile)
         => JolietComponentProjectsToIsoComponent(jolietComponent, isoComponent, isFile, null);
 
-    private static bool JolietComponentProjectsToIsoComponent(string jolietComponent, string isoComponent, bool isFile, JolietNamingProfile? profile)
+    private static bool JolietComponentProjectsToIsoComponent(
+        string jolietComponent,
+        string isoComponent,
+        bool isFile,
+        JolietNamingProfile? profile,
+        bool allowOpaqueTildeAlias = true)
     {
         string source = Regex.Replace(jolietComponent.Normalize(NormalizationForm.FormC), @";\d+$", string.Empty);
         string target = Regex.Replace(isoComponent.Normalize(NormalizationForm.FormC), @";\d+$", string.Empty);
@@ -540,7 +572,8 @@ public sealed partial class SkeletonResurrectionService
         // from the display name, so this deliberately requires an explicit
         // mastering profile. Complete-path, exact-size and reverse-uniqueness
         // checks remain mandatory at the caller.
-        if (JolietNamingRuleService.ProfileExplicitlyAllows(profile, "OpaqueTildeAlias") &&
+        if (allowOpaqueTildeAlias &&
+            JolietNamingRuleService.ProfileExplicitlyAllows(profile, "OpaqueTildeAlias") &&
             JolietComponentMatchesOpaqueTildeAlias(source, target, isFile))
         {
             return true;

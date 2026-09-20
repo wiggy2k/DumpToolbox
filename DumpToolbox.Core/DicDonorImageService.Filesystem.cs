@@ -47,11 +47,21 @@ public sealed partial class DicDonorImageService
         }
 
         if (pvd is null)
-            return new DonorFilesystem(null, string.Empty, jolietSvd is not null, Array.Empty<DicDonorFile>(), Array.Empty<DicDonorFile>(), metadata);
+            return new DonorFilesystem(
+                null,
+                string.Empty,
+                jolietSvd is not null,
+                Array.Empty<DicDonorFile>(),
+                Array.Empty<DicDonorFile>(),
+                metadata,
+                null,
+                Array.Empty<NeroNriPayloadRequirement>());
 
         string volumeId = Encoding.ASCII.GetString(pvd, 40, 32).TrimEnd(' ', '\0');
         var primaryFiles = new List<DicDonorFile>();
-        await CollectDescriptorMetadataAndTreeAsync(image, pvd, false, primaryFiles, metadata, cancellationToken).ConfigureAwait(false);
+        var primaryNeroRequirements = new List<NeroNriPayloadRequirement>();
+        await CollectDescriptorMetadataAndTreeAsync(
+            image, pvd, false, primaryFiles, primaryNeroRequirements, metadata, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<DicDonorFile> combinedPrimaryFiles = CombineMultiExtentDonorFiles(primaryFiles);
 
         IReadOnlyList<DicDonorFile> combinedJolietFiles = Array.Empty<DicDonorFile>();
@@ -60,12 +70,117 @@ public sealed partial class DicDonorImageService
             // Joliet metadata is intentionally collected into a throw-away set so it does
             // not become eligible for same-disc primary metadata copying.
             var jolietFiles = new List<DicDonorFile>();
+            var jolietNeroRequirements = new List<NeroNriPayloadRequirement>();
             var jolietMetadata = new HashSet<long>();
-            await CollectDescriptorMetadataAndTreeAsync(image, jolietSvd, true, jolietFiles, jolietMetadata, cancellationToken).ConfigureAwait(false);
+            await CollectDescriptorMetadataAndTreeAsync(
+                image, jolietSvd, true, jolietFiles, jolietNeroRequirements, jolietMetadata, cancellationToken).ConfigureAwait(false);
             combinedJolietFiles = CombineMultiExtentDonorFiles(jolietFiles);
+            primaryNeroRequirements.AddRange(jolietNeroRequirements);
         }
 
-        return new DonorFilesystem(pvd, volumeId, jolietSvd is not null, combinedPrimaryFiles, combinedJolietFiles, metadata);
+        var mergedPrimaryFiles = combinedPrimaryFiles.ToList();
+        foreach (DicDonorFile jolietNri in combinedJolietFiles.Where(file => file.IsEmbeddedNeroProject))
+        {
+            int match = mergedPrimaryFiles.FindIndex(file =>
+                file.IsEmbeddedNeroProject &&
+                file.ExtentLba == jolietNri.ExtentLba &&
+                file.DataLength == jolietNri.DataLength &&
+                Path.GetFileName(file.Path).Equals(Path.GetFileName(jolietNri.Path), StringComparison.OrdinalIgnoreCase));
+            if (match >= 0)
+            {
+                mergedPrimaryFiles[match] = mergedPrimaryFiles[match] with
+                {
+                    NeroDirectoryNamespaces = "ISO9660+Joliet"
+                };
+            }
+            else
+            {
+                mergedPrimaryFiles.Add(jolietNri);
+            }
+        }
+
+        NeroNriDetector.SystemAreaRecord? neroSystemAreaRecord = null;
+        try
+        {
+            byte[] sector15 = await image.ReadForm1SectorAsync(SystemAreaSectors - 1, cancellationToken).ConfigureAwait(false);
+            NeroNriDetector.TryParseSystemAreaRecord(sector15, out neroSystemAreaRecord);
+        }
+        catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException)
+        {
+            // A hidden NRI payload remains useful even when sector 15 is unavailable or
+            // uses an unsupported physical sector form.
+        }
+
+        if (neroSystemAreaRecord is not null &&
+            !mergedPrimaryFiles.Any(file =>
+                file.IsEmbeddedNeroProject &&
+                file.ExtentLba == neroSystemAreaRecord.ExtentLba &&
+                file.DataLength == neroSystemAreaRecord.DataLength &&
+                Path.GetFileName(file.Path).Equals(neroSystemAreaRecord.FileName, StringComparison.OrdinalIgnoreCase)) &&
+            neroSystemAreaRecord.ExtentLba < image.SectorCount)
+        {
+            try
+            {
+                byte[] header = await image.ReadForm1SectorAsync(
+                    neroSystemAreaRecord.ExtentLba,
+                    cancellationToken).ConfigureAwait(false);
+                int headerLength = (int)Math.Min((uint)header.Length, neroSystemAreaRecord.DataLength);
+                if (NeroNriDetector.TryReadPayloadSignature(
+                        header.AsSpan(0, headerLength),
+                        out string signature))
+                {
+                    mergedPrimaryFiles.Add(new DicDonorFile(
+                        neroSystemAreaRecord.FileName,
+                        neroSystemAreaRecord.ExtentLba,
+                        neroSystemAreaRecord.DataLength,
+                        FileFlags: 0x01,
+                        IsEmbeddedNeroProject: true,
+                        NeroIsoSignature: signature,
+                        NeroDirectoryNamespaces: "sector 15"));
+                }
+            }
+            catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException)
+            {
+                // The requirement is retained below and becomes an explicit warning.
+            }
+        }
+
+        var neroRequirements = primaryNeroRequirements
+            .GroupBy(requirement => (
+                requirement.FileName.ToUpperInvariant(),
+                requirement.ExtentLba,
+                requirement.DataLength))
+            .Select(group => new NeroNriPayloadRequirement(
+                group.First().FileName,
+                group.Key.ExtentLba,
+                group.Key.DataLength,
+                "embedded " + string.Join(
+                    "+",
+                    group.Select(requirement => requirement.Evidence)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)) + " directory record"))
+            .ToList();
+        if (neroSystemAreaRecord is not null &&
+            !neroRequirements.Any(requirement =>
+                requirement.FileName.Equals(neroSystemAreaRecord.FileName, StringComparison.OrdinalIgnoreCase) &&
+                requirement.ExtentLba == neroSystemAreaRecord.ExtentLba &&
+                requirement.DataLength == neroSystemAreaRecord.DataLength))
+        {
+            neroRequirements.Add(new NeroNriPayloadRequirement(
+                neroSystemAreaRecord.FileName,
+                neroSystemAreaRecord.ExtentLba,
+                neroSystemAreaRecord.DataLength,
+                "valid Nero sector-15 record"));
+        }
+
+        return new DonorFilesystem(
+            pvd,
+            volumeId,
+            jolietSvd is not null,
+            mergedPrimaryFiles,
+            combinedJolietFiles,
+            metadata,
+            neroSystemAreaRecord,
+            neroRequirements);
     }
 
 
@@ -134,6 +249,7 @@ public sealed partial class DicDonorImageService
         byte[] descriptor,
         bool joliet,
         List<DicDonorFile> files,
+        List<NeroNriPayloadRequirement> neroRequirements,
         HashSet<long> metadata,
         CancellationToken cancellationToken)
     {
@@ -154,7 +270,17 @@ public sealed partial class DicDonorImageService
         uint rootLba = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(158, 4));
         uint rootLength = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(166, 4));
         var visited = new HashSet<uint>();
-        await ParseDirectoryAsync(image, checked(rootLba + (uint)rootExtendedAttributeLength), rootLength, string.Empty, joliet, files, metadata, visited, cancellationToken).ConfigureAwait(false);
+        await ParseDirectoryAsync(
+            image,
+            checked(rootLba + (uint)rootExtendedAttributeLength),
+            rootLength,
+            string.Empty,
+            joliet,
+            files,
+            neroRequirements,
+            metadata,
+            visited,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task ParseDirectoryAsync(
@@ -164,6 +290,7 @@ public sealed partial class DicDonorImageService
         string parentPath,
         bool joliet,
         List<DicDonorFile> files,
+        List<NeroNriPayloadRequirement> neroRequirements,
         HashSet<long> metadata,
         HashSet<uint> visited,
         CancellationToken cancellationToken)
@@ -188,6 +315,80 @@ public sealed partial class DicDonorImageService
             }
             if (recordLength < 34 || position + recordLength > bytes.Length)
                 break;
+
+            if (NeroNriDetector.TryParseEmbeddedDirectoryRecord(
+                    bytes.AsSpan(position, recordLength),
+                    out NeroNriDetector.EmbeddedDirectoryRecord? embeddedNri) &&
+                embeddedNri is not null)
+            {
+                if (!neroRequirements.Any(requirement =>
+                        requirement.FileName.Equals(embeddedNri.FileName, StringComparison.OrdinalIgnoreCase) &&
+                        requirement.ExtentLba == embeddedNri.ExtentLba &&
+                        requirement.DataLength == embeddedNri.DataLength))
+                {
+                    neroRequirements.Add(new NeroNriPayloadRequirement(
+                        embeddedNri.FileName,
+                        embeddedNri.ExtentLba,
+                        embeddedNri.DataLength,
+                        joliet ? "Joliet" : "ISO9660"));
+                }
+
+                if (embeddedNri.ExtentLba < image.SectorCount)
+                {
+                    try
+                    {
+                        long payloadLba = checked((long)embeddedNri.ExtentLba + embeddedNri.ExtendedAttributeRecordLength);
+                        byte[] header = await image.ReadForm1SectorAsync(payloadLba, cancellationToken).ConfigureAwait(false);
+                        int headerLength = (int)Math.Min((uint)header.Length, embeddedNri.DataLength);
+                        if (NeroNriDetector.TryReadPayloadSignature(
+                                header.AsSpan(0, headerLength),
+                                out string neroSignature) &&
+                            !files.Any(file => file.IsEmbeddedNeroProject &&
+                                file.ExtentLba == embeddedNri.ExtentLba &&
+                                file.DataLength == embeddedNri.DataLength &&
+                                Path.GetFileName(file.Path).Equals(embeddedNri.FileName, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            int nestedPosition = position + embeddedNri.RecordOffset;
+                            DateTimeOffset? recordingTime = TryReadIsoRecordingTime(
+                                bytes.AsSpan(nestedPosition, embeddedNri.RecordLength),
+                                out DateTimeOffset parsedTime)
+                                ? parsedTime
+                                : null;
+                            string nriPath = string.IsNullOrEmpty(parentPath)
+                                ? embeddedNri.FileName
+                                : parentPath + "/" + embeddedNri.FileName;
+                            files.Add(new DicDonorFile(
+                                nriPath,
+                                embeddedNri.ExtentLba,
+                                embeddedNri.DataLength,
+                                recordingTime,
+                                embeddedNri.FileFlags,
+                                embeddedNri.ExtendedAttributeRecordLength,
+                                embeddedNri.FileUnitSize,
+                                embeddedNri.InterleaveGapSize,
+                                Extents: null,
+                                DirectoryExtentLba: extentLba,
+                                DirectoryRecordOffset: nestedPosition,
+                                DirectoryRecordIndex: recordIndex,
+                                DirectoryRecordLength: embeddedNri.RecordLength,
+                                IdentifierLength: embeddedNri.IdentifierLength,
+                                IdentifierPaddingValue: TryReadIdentifierPadding(
+                                    bytes,
+                                    nestedPosition,
+                                    embeddedNri.RecordLength,
+                                    embeddedNri.IdentifierLength),
+                                IsEmbeddedNeroProject: true,
+                                NeroIsoSignature: neroSignature,
+                                NeroDirectoryNamespaces: joliet ? "Joliet" : "ISO9660"));
+                        }
+                    }
+                    catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException or OverflowException)
+                    {
+                        // Treat an unreadable or missing payload as an unsatisfied NRI
+                        // requirement; it must never break extraction of the visible tree.
+                    }
+                }
+            }
 
             int idLength = bytes[position + 32];
             if (33 + idLength <= recordLength && idLength > 0)
@@ -237,7 +438,17 @@ public sealed partial class DicDonorImageService
                     if (isDirectory)
                     {
                         uint directoryDataLba = checked(childLba + (uint)extendedAttributeRecordLength);
-                        await ParseDirectoryAsync(image, directoryDataLba, childLength, childPath, joliet, files, metadata, visited, cancellationToken).ConfigureAwait(false);
+                        await ParseDirectoryAsync(
+                            image,
+                            directoryDataLba,
+                            childLength,
+                            childPath,
+                            joliet,
+                            files,
+                            neroRequirements,
+                            metadata,
+                            visited,
+                            cancellationToken).ConfigureAwait(false);
                     }
                 }
             }

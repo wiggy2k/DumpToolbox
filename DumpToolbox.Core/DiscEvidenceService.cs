@@ -8,7 +8,7 @@ public sealed record DiscEvidenceProgress(string Phase, string Source, int Compl
 
 public sealed partial class DiscEvidenceService
 {
-    public const int EvidenceSchema = 6;
+    public const int EvidenceSchema = 7;
     private readonly SkeletoolCatalogueService _catalogue;
     private readonly JolietNamingRuleSet _namingRules;
     public string DatabasePath { get; }
@@ -255,12 +255,31 @@ ORDER BY s.source_path,i.display_name,e.path";
         bool sourceIsJoliet,
         JolietNamingProfile? namingProfile)
     {
-        DiscFilesystemRecordEvidence[] projected = sameGeometry.Where(source => sourceIsJoliet
+        DiscFilesystemRecordEvidence[] FindProjectedCandidates(bool allowOpaqueTildeAlias) => sameGeometry
+            .Where(source => sourceIsJoliet
                 ? SkeletonResurrectionService.EvidenceJolietPathProjectsToIsoPath(
-                    source.Path, target.Path, target.IsDirectory, namingProfile)
+                    source.Path,
+                    target.Path,
+                    target.IsDirectory,
+                    namingProfile,
+                    allowOpaqueTildeAlias)
                 : SkeletonResurrectionService.EvidenceJolietPathProjectsToIsoPath(
-                    target.Path, source.Path, source.IsDirectory, namingProfile))
+                    target.Path,
+                    source.Path,
+                    source.IsDirectory,
+                    namingProfile,
+                    allowOpaqueTildeAlias))
             .ToArray();
+
+        // Opaque ~x aliases are deliberately a fallback tier. They carry no
+        // derivable name identity and must not inflate a candidate set already
+        // established by exact or ordinary ISO9660 projection rules.
+        DiscFilesystemRecordEvidence[] projected = FindProjectedCandidates(allowOpaqueTildeAlias: false);
+        if (projected.Length == 0 &&
+            JolietNamingRuleService.ProfileExplicitlyAllows(namingProfile, "OpaqueTildeAlias"))
+        {
+            projected = FindProjectedCandidates(allowOpaqueTildeAlias: true);
+        }
 
         int? afterTimestamp = target.RecordingTime is DateTimeOffset targetTime
             ? projected.Count(source => source.RecordingTime is DateTimeOffset sourceTime &&

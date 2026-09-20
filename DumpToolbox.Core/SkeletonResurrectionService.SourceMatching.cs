@@ -82,7 +82,8 @@ public sealed partial class SkeletonResurrectionService
             // The canonical all-zero SYSTEM_AREA is satisfied by regenerating raw
             // sector protection data; it does not require an external source file.
             if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                string.Equals(entry.Sha1, ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase))
+                (string.Equals(entry.Sha1, ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
+                 CanRecoverNeroSystemArea(inspection)))
                 continue;
 
             if (!string.IsNullOrWhiteSpace(entry.Sha1) && !entry.Sha1.Equals(EmptySha1, StringComparison.OrdinalIgnoreCase))
@@ -111,7 +112,8 @@ public sealed partial class SkeletonResurrectionService
             .Where(e => e.CanRestore &&
                         !e.IsEmpty &&
                         !(e.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                          string.Equals(e.Sha1, ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase)) &&
+                          (string.Equals(e.Sha1, ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
+                           CanRecoverNeroSystemArea(inspection))) &&
                         !string.IsNullOrWhiteSpace(e.Sha1) &&
                         e.DataLength > 0)
             .Select(e => e.DataLength)
@@ -136,6 +138,7 @@ public sealed partial class SkeletonResurrectionService
         FileInfo[] files = Directory.EnumerateFiles(directory, "*", option)
             .Select(path => new FileInfo(path))
             .Where(info => !PathsEqual(info.FullName, inspection.SkeletonPath) &&
+                           !PathsEqual(info.FullName, inspection.EffectiveSkeletonPath) &&
                            !PathsEqual(info.FullName, inspection.HashPath) &&
                            !PathsEqual(info.FullName, cachePath))
             .ToArray();
@@ -179,7 +182,11 @@ public sealed partial class SkeletonResurrectionService
                 // If all manifest entries are already satisfied, avoid hashing the rest
                 // of a large source tree. Work already in flight may finish naturally.
                 bool allFound = requiredTargetCount > 0 && matches.Count >= requiredTargetCount;
-                bool skipForLength = useLengthFilter && !expectedLengths.Contains(file.Length);
+                string? neroSignature = null;
+                if (NeroNriDetector.CouldContainPayloadSignature(file.Length))
+                    neroSignature = await TryReadStandaloneNeroSignatureAsync(file.FullName, ct).ConfigureAwait(false);
+
+                bool skipForLength = useLengthFilter && !expectedLengths.Contains(file.Length) && neroSignature is null;
                 bool skip = allFound || skipForLength;
 
                 string? sha1 = null;
@@ -235,6 +242,21 @@ public sealed partial class SkeletonResurrectionService
                 int hashedFilesNow = Volatile.Read(ref filesHashed);
                 int skippedFilesNow = Volatile.Read(ref filesSkipped);
                 int cachedFilesNow = Volatile.Read(ref filesCached);
+
+                if (sha1 is not null && neroSignature is not null)
+                {
+                    progress?.Report(new SkeletonSourceScanProgress(
+                        processedFilesNow,
+                        files.Length,
+                        processedBytesNow,
+                        totalBytes,
+                        file.FullName,
+                        BytesHashed: hashedBytesNow,
+                        FilesHashed: hashedFilesNow,
+                        FilesSkipped: skippedFilesNow,
+                        FilesCached: cachedFilesNow,
+                        DetectedNeroProject: $"{file.Name}: {neroSignature}, {file.Length:N0} bytes, SHA-1 {sha1}"));
+                }
 
                 if (sha1 is not null && expected.TryGetValue(sha1, out List<(SkeletonContentEntry Entry, bool Xa)>? targets))
                 {
@@ -357,6 +379,34 @@ public sealed partial class SkeletonResurrectionService
                     cancellationToken).ConfigureAwait(false);
             }
 
+            NeroNriDetector.SystemAreaRecord? sourceSystemArea = null;
+            try
+            {
+                byte[] sector15 = await reader.ReadForm1SectorAsync(
+                    reader.BaseLba + SystemAreaSectors - 1,
+                    cancellationToken).ConfigureAwait(false);
+                NeroNriDetector.TryParseSystemAreaRecord(sector15, out sourceSystemArea);
+            }
+            catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException)
+            {
+                // A generic or unreadable system area is not Nero evidence.
+            }
+            IReadOnlyList<string> sourceNeroWarnings = await FindMissingNeroPayloadWarningsAsync(
+                reader,
+                tree,
+                sourceSystemArea,
+                cancellationToken).ConfigureAwait(false);
+            foreach (string warning in sourceNeroWarnings)
+            {
+                progress?.Report(new SkeletonSourceScanProgress(
+                    0,
+                    tree.Files.Count,
+                    0,
+                    tree.Files.Sum(file => file.LogicalLength),
+                    imagePath,
+                    DetectedNeroProject: "WARNING: " + warning));
+            }
+
             var expected = new Dictionary<string, List<(SkeletonContentEntry Entry, bool Xa)>>(StringComparer.OrdinalIgnoreCase);
             foreach (SkeletonContentEntry entry in inspection.Entries.Where(e => e.CanRestore && !e.IsEmpty))
             {
@@ -365,11 +415,12 @@ public sealed partial class SkeletonResurrectionService
             }
 
             var matches = new Dictionary<string, SkeletonSourceMatch>(StringComparer.OrdinalIgnoreCase);
-            long totalBytes = tree.Files.Sum(f => f.LogicalLength);
+            IReadOnlyList<IsoFileExtent> scanFiles = IncludeVerifiedNeroProjects(tree);
+            long totalBytes = scanFiles.Sum(f => f.LogicalLength);
             long processedBytes = 0;
             int processed = 0;
 
-            foreach (IsoFileExtent file in tree.Files)
+            foreach (IsoFileExtent file in scanFiles)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 byte[] payload;
@@ -391,11 +442,27 @@ public sealed partial class SkeletonResurrectionService
                 catch (InvalidOperationException)
                 {
                     processedBytes += file.LogicalLength; processed++;
-                    progress?.Report(new SkeletonSourceScanProgress(processed, tree.Files.Count, processedBytes, totalBytes, file.Path, FilesSkipped: 1));
+                    progress?.Report(new SkeletonSourceScanProgress(processed, scanFiles.Count, processedBytes, totalBytes, file.Path, FilesSkipped: 1));
                     continue;
                 }
 
                 string sha1 = Convert.ToHexString(SHA1.HashData(payload)).ToLowerInvariant();
+                NeroProjectEntry? neroProject = tree.NeroProjects.FirstOrDefault(candidate =>
+                    candidate.Lba == file.Lba &&
+                    candidate.DataLength == file.LogicalLength &&
+                    ("/" + candidate.FileName).Equals(file.Path, StringComparison.OrdinalIgnoreCase));
+                if (neroProject is not null)
+                {
+                    progress?.Report(new SkeletonSourceScanProgress(
+                        processed,
+                        scanFiles.Count,
+                        processedBytes,
+                        totalBytes,
+                        file.Path,
+                        BytesHashed: processedBytes,
+                        FilesHashed: processed,
+                        DetectedNeroProject: $"{neroProject.FileName}: {neroProject.Signature}, {neroProject.DirectoryNamespaces}, LBA {neroProject.Lba:N0}, {neroProject.DataLength:N0} bytes, SHA-1 {sha1}"));
+                }
                 if (expected.TryGetValue(sha1, out List<(SkeletonContentEntry Entry, bool Xa)>? targets))
                 {
                     foreach ((SkeletonContentEntry entry, bool xa) in targets)
@@ -409,18 +476,36 @@ public sealed partial class SkeletonResurrectionService
                             continue;
                         matches[entry.Path] = new SkeletonSourceMatch(matchedEntry, imagePath, sha1, false,
                             "ISO/BIN image logical file SHA1", file.Path, file.Lba, file.LogicalLength, SourceImageExtents: file.LogicalExtents);
-                        progress?.Report(new SkeletonSourceScanProgress(processed, tree.Files.Count, processedBytes, totalBytes,
+                        progress?.Report(new SkeletonSourceScanProgress(processed, scanFiles.Count, processedBytes, totalBytes,
                             file.Path, entry.Path, $"{imagePath}::{file.Path}", false));
                     }
                 }
 
                 processedBytes += file.LogicalLength; processed++;
-                progress?.Report(new SkeletonSourceScanProgress(processed, tree.Files.Count, processedBytes, totalBytes, file.Path,
+                progress?.Report(new SkeletonSourceScanProgress(processed, scanFiles.Count, processedBytes, totalBytes, file.Path,
                     BytesHashed: processedBytes, FilesHashed: processed));
             }
 
             return (IReadOnlyDictionary<string, SkeletonSourceMatch>)matches;
         }, cancellationToken);
+
+    internal static async Task<string?> TryReadStandaloneNeroSignatureAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        byte[] header = new byte[256];
+        await using FileStream stream = new(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            header.Length,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        int read = await stream.ReadAsync(header, cancellationToken).ConfigureAwait(false);
+        return NeroNriDetector.TryReadPayloadSignature(header.AsSpan(0, read), out string signature)
+            ? signature
+            : null;
+    }
 
 
     private static IReadOnlyDictionary<string, SkeletonSourceMatch> MatchDicSources(
@@ -441,6 +526,7 @@ public sealed partial class SkeletonResurrectionService
         SearchOption option = SearchOption.AllDirectories;
         var excluded = new HashSet<string>(GetPathComparer());
         excluded.Add(Path.GetFullPath(inspection.SkeletonPath));
+        excluded.Add(Path.GetFullPath(inspection.EffectiveSkeletonPath));
         if (!string.IsNullOrWhiteSpace(inspection.HashPath))
             excluded.Add(Path.GetFullPath(inspection.HashPath));
         if (inspection.CompanionPaths is not null)
@@ -493,6 +579,31 @@ public sealed partial class SkeletonResurrectionService
         // This mirrors the DICSimulator v0.0.12 safety rule and prevents a strong early
         // match from being silently reused by a later fuzzy/ordinal fallback.
         var sourceClaims = new Dictionary<string, HashSet<uint>>(GetPathComparer());
+        var identicalPayloadComparisons = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        bool SourcePayloadsAreIdentical(FileInfo first, FileInfo second)
+        {
+            string firstPath = Path.GetFullPath(first.FullName);
+            string secondPath = Path.GetFullPath(second.FullName);
+            StringComparison pathComparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (firstPath.Equals(secondPath, pathComparison))
+                return true;
+
+            StringComparer pathOrder = OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
+            string key = pathOrder.Compare(firstPath, secondPath) <= 0
+                ? firstPath + "\0" + secondPath
+                : secondPath + "\0" + firstPath;
+            if (!identicalPayloadComparisons.TryGetValue(key, out bool identical))
+            {
+                identical = DicSourceFilesHaveIdenticalPayloads(firstPath, secondPath, cancellationToken);
+                identicalPayloadComparisons[key] = identical;
+            }
+            return identical;
+        }
 
         bool SourceAvailableForEntry(FileInfo source, SkeletonContentEntry target)
         {
@@ -805,18 +916,42 @@ public sealed partial class SkeletonResurrectionService
                 if (exact.Length == 1)
                 {
                     FileInfo exactCandidate = exact[0];
-                    bool competingProjection = bySize.TryGetValue(entry.DataLength, out List<FileInfo>? sameSizeForExactGuard) &&
-                        sameSizeForExactGuard.Any(candidate =>
+                    FileInfo[] competingProjections = bySize.TryGetValue(entry.DataLength, out List<FileInfo>? sameSizeForExactGuard)
+                        ? sameSizeForExactGuard.Where(candidate =>
                             !GetPathComparer().Equals(Path.GetFullPath(candidate.FullName), Path.GetFullPath(exactCandidate.FullName)) &&
                             SourceAvailableForEntry(candidate, entry) &&
                             relativePaths.TryGetValue(candidate.FullName, out string? relative) &&
-                            JolietPathProjectsToIsoPath(relative, expectedPath, masteringNamingProfile));
+                            JolietPathProjectsToIsoPath(
+                                relative,
+                                expectedPath,
+                                masteringNamingProfile,
+                                terminalIsFile: true,
+                                allowOpaqueTildeAlias: false))
+                            .GroupBy(candidate => candidate.FullName, GetPathComparer())
+                            .Select(group => group.First())
+                            .ToArray()
+                        : Array.Empty<FileInfo>();
+                    bool competingProjection = competingProjections.Length > 0;
+
+                    // CeQuadrat/WinOnCD can leave a literal numeric-looking filename and
+                    // a generated _N alias mutually plausible. Age of Empires II contains
+                    // four such 17-byte records whose payloads are all byte-identical. In
+                    // that payload-neutral case the literal complete path is the strongest
+                    // available pathname evidence, and retaining it prevents the weaker
+                    // collision resolver from swapping Joliet names between extents.
+                    // Keep the existing conservative deferral whenever even one competing
+                    // payload differs or the mastering profile is not CeQuadrat/WinOnCD.
+                    bool identicalCeQuadratAliasTie = competingProjection &&
+                        IsCeQuadratOrWinOnCdNamingProfile(masteringNamingProfile) &&
+                        competingProjections.All(candidate => SourcePayloadsAreIdentical(exactCandidate, candidate));
 
                     // DICSimulator v0.0.12 exposed a dangerous case where a literal Joliet
                     // sibling and another same-size long name can both collapse onto the
                     // same primary ISO identifier. Defer rather than letting the literal
-                    // spelling win merely because it happens to exist on disk.
-                    if (!competingProjection)
+                    // spelling win merely because it happens to exist on disk. The narrow
+                    // CeQuadrat exception above is safe for payload placement because every
+                    // otherwise-plausible source was compared byte-for-byte first.
+                    if (!competingProjection || identicalCeQuadratAliasTie)
                     {
                         selected = exactCandidate;
                         break;
@@ -852,13 +987,30 @@ public sealed partial class SkeletonResurrectionService
                     .Select(NormalizeDicRelativePath)
                     .ToArray();
 
-                FileInfo[] projected = sizeCandidates
+                FileInfo[] FindProjectedCandidates(bool allowOpaqueTildeAlias) => sizeCandidates
                     .Where(candidate => SourceAvailableForEntry(candidate, entry))
                     .Where(candidate => relativePaths.TryGetValue(candidate.FullName, out string? relative) &&
-                                        expectedAliases.Any(expected => JolietPathProjectsToIsoPath(relative, expected, masteringNamingProfile)))
+                                        expectedAliases.Any(expected => JolietPathProjectsToIsoPath(
+                                            relative,
+                                            expected,
+                                            masteringNamingProfile,
+                                            terminalIsFile: true,
+                                            allowOpaqueTildeAlias: allowOpaqueTildeAlias)))
                     .GroupBy(candidate => candidate.FullName, GetPathComparer())
                     .Select(group => group.First())
                     .ToArray();
+
+                // Opaque ~x tokens are allocator output, not a deterministic projection
+                // of the display name. Let exact/ordinary projections establish their
+                // candidate set first, and consult opaque aliases only when that set is
+                // empty. Otherwise an unrelated same-sized ~x sibling can make a literal
+                // or ordinary Joliet pathname appear ambiguous.
+                FileInfo[] projected = FindProjectedCandidates(allowOpaqueTildeAlias: false);
+                if (projected.Length == 0 &&
+                    JolietNamingRuleService.ProfileExplicitlyAllows(masteringNamingProfile, "OpaqueTildeAlias"))
+                {
+                    projected = FindProjectedCandidates(allowOpaqueTildeAlias: true);
+                }
 
                 bool timestampDisambiguated = false;
                 if (projected.Length > 1 && entry.RecordingTime is DateTimeOffset expectedRecordingTime)
@@ -881,17 +1033,34 @@ public sealed partial class SkeletonResurrectionService
                     // the same timestamp constraint to the reverse check; the timestamp is
                     // evidence only after path+size compatibility has already been proven.
                     string relative = relativePaths[projected[0].FullName];
-                    int compatibleEntries = requiredEntries.Count(other =>
-                        (other.IsoFileFlags & 0x04) == 0 &&
-                        other.DataLength == entry.DataLength &&
-                        GetDicEntryAliases(other)
-                            .Select(NormalizeDicRelativePath)
-                            .Any(expected => JolietPathProjectsToIsoPath(relative, expected, masteringNamingProfile)) &&
-                        (!timestampDisambiguated ||
-                         (other.RecordingTime is DateTimeOffset otherRecordingTime &&
-                          SourceTimestampMatchesDicRecordingTime(projected[0], otherRecordingTime))));
+                    SkeletonContentEntry[] FindCompatibleEntries(bool allowOpaqueTildeAlias) => requiredEntries
+                        .Where(other =>
+                            (other.IsoFileFlags & 0x04) == 0 &&
+                            other.DataLength == entry.DataLength &&
+                            GetDicEntryAliases(other)
+                                .Select(NormalizeDicRelativePath)
+                                .Any(expected => JolietPathProjectsToIsoPath(
+                                    relative,
+                                    expected,
+                                    masteringNamingProfile,
+                                    terminalIsFile: true,
+                                    allowOpaqueTildeAlias: allowOpaqueTildeAlias)) &&
+                            (!timestampDisambiguated ||
+                             (other.RecordingTime is DateTimeOffset otherRecordingTime &&
+                              SourceTimestampMatchesDicRecordingTime(projected[0], otherRecordingTime))))
+                        .ToArray();
 
-                    if (compatibleEntries == 1)
+                    SkeletonContentEntry[] compatibleEntries = FindCompatibleEntries(allowOpaqueTildeAlias: false);
+                    if (compatibleEntries.Length == 0 &&
+                        JolietNamingRuleService.ProfileExplicitlyAllows(masteringNamingProfile, "OpaqueTildeAlias"))
+                    {
+                        compatibleEntries = FindCompatibleEntries(allowOpaqueTildeAlias: true);
+                    }
+
+                    bool uniquelyMapsBackToCurrentEntry = compatibleEntries.Length == 1 &&
+                        (ReferenceEquals(compatibleEntries[0], entry) ||
+                         compatibleEntries[0].Path.Equals(entry.Path, StringComparison.OrdinalIgnoreCase));
+                    if (uniquelyMapsBackToCurrentEntry)
                     {
                         selected = projected[0];
                         matchMethod = timestampDisambiguated
@@ -2028,6 +2197,79 @@ public sealed partial class SkeletonResurrectionService
             string.Empty));
 
         return matches;
+    }
+
+    internal static bool DicSourceFilesHaveIdenticalPayloads(
+        string firstPath,
+        string secondPath,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var first = new FileStream(
+                firstPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                128 * 1024,
+                FileOptions.SequentialScan);
+            using var second = new FileStream(
+                secondPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                128 * 1024,
+                FileOptions.SequentialScan);
+            if (first.Length != second.Length)
+                return false;
+
+            byte[] firstBuffer = ArrayPool<byte>.Shared.Rent(128 * 1024);
+            byte[] secondBuffer = ArrayPool<byte>.Shared.Rent(128 * 1024);
+            try
+            {
+                long remaining = first.Length;
+                while (remaining > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int count = (int)Math.Min(firstBuffer.Length, remaining);
+                    first.ReadExactly(firstBuffer.AsSpan(0, count));
+                    second.ReadExactly(secondBuffer.AsSpan(0, count));
+                    if (!firstBuffer.AsSpan(0, count).SequenceEqual(secondBuffer.AsSpan(0, count)))
+                        return false;
+                    remaining -= count;
+                }
+                return true;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(firstBuffer);
+                ArrayPool<byte>.Shared.Return(secondBuffer);
+            }
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsCeQuadratOrWinOnCdNamingProfile(JolietNamingProfile? profile)
+    {
+        if (profile is null)
+            return false;
+
+        static bool HasFormatterName(string value)
+            => value.Contains("CEQUADRAT", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("CEQUDRAT", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("WINONCD", StringComparison.OrdinalIgnoreCase);
+
+        return HasFormatterName(profile.Name) ||
+               HasFormatterName(profile.ApplicationContains) ||
+               HasFormatterName(profile.DataPreparerContains) ||
+               HasFormatterName(profile.IdentityContains);
     }
 
     private static void AddCandidate(Dictionary<string, List<FileInfo>> dictionary, string key, FileInfo file)

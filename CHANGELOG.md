@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.8.108 — 2026-09-20
+
+### Added
+
+- SkeleTool now detects Nero's hidden `!!MSxxxx.NRI`/`NeroISO` project data and reconstructs the missing 32-byte sector-15 `SYSTEM_AREA` record, recovering its four private bytes with a cancellable, vectorized SHA-1 search and dedicated progress window.
+- DIC recovery now detects the same embedded hidden-NRI directory record in exact `mainInfo` directory sectors. It uses directly captured private bytes when available; otherwise, after a complete rebuild, it solves them from the whole-image CRC32 and retains the generated system area only when the DIC MD5/SHA-1 also verifies.
+- ISO Extractor now detects and extracts Nero's embedded hidden NRI project payloads, recording their `NeroISO` signature, LBA, length, SHA-1, and matching sector-15 private value in the extraction manifest.
+- SkeleTool source-image, source-folder, and SHA-1 catalogue scans now recognise hidden or standalone NRI payloads; existing ISO9660 catalogue entries are scheduled for a one-time refresh.
+- SkeleTool, ISO Extractor, source-image scans and catalogue scans now warn when a parsed hidden NRI directory record or structurally valid Nero sector-15 record references a missing/invalid `NeroISO` payload. Arbitrary non-zero system areas do not trigger this warning.
+- SkeleTool now accepts historical raw-LZMA skeletons, Zstandard-compressed skeletons, and `.skeleton` entries stored in 7z/ZIP/RAR/gzip/bzip2/XZ/TAR archives, expanding them beside the selected input with load progress.
+
+### Changed
+
+- Compressed skeleton working copies use predictable neighbouring filenames: an already-named `name.skeleton` expands to `name.skeleton.temp`, while `name.skeleton.zst`/`.zstd` expands to `name.skeleton`; existing files are never overwritten.
+- SkeleTool and DIC file trees now show yellow folder icons and sort folders together before a contiguous file list at every level.
+
+### Tests
+
+- Added regression coverage for embedded Nero NRI detection, exact system-area construction, constrained private-byte recovery, and generated in-memory resurrection matches.
+- Added cooked-ISO and raw-BIN coverage for DIC hidden-NRI detection, CRC-derived private-byte recovery, and raw-sector EDC/ECC regeneration.
+- Added regression coverage for hidden-NRI extraction, manifest metadata, sector-15 correlation, catalogue indexing, and standalone NRI signature recognition.
+- Added regression coverage proving that direct Nero evidence with a missing NRI payload warns, while an unrelated non-zero system area does not.
+- Added regression coverage for raw-LZMA and Zstandard skeleton expansion and archive-contained skeleton selection.
+
 ## 0.8.107 — 2026-09-13
 
 ### Added

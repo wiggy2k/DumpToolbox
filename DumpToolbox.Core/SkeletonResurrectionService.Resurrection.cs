@@ -12,7 +12,7 @@ namespace DumpToolbox.Core;
 
 public sealed partial class SkeletonResurrectionService
 {
-    public Task<SkeletonResurrectionResult> ResurrectAsync(
+    public async Task<SkeletonResurrectionResult> ResurrectAsync(
         SkeletonInspectionResult inspection,
         IReadOnlyDictionary<string, SkeletonSourceMatch> matches,
         string outputPath,
@@ -20,23 +20,46 @@ public sealed partial class SkeletonResurrectionService
         IProgress<SkeletonResurrectionProgress>? progress = null,
         IProgress<string>? activity = null,
         CancellationToken cancellationToken = default,
-        Func<EofSlackAmbiguityRequest, CancellationToken, Task<EofSlackAmbiguityDecision>>? eofSlackAmbiguityResolver = null)
+        Func<EofSlackAmbiguityRequest, CancellationToken, Task<EofSlackAmbiguityDecision>>? eofSlackAmbiguityResolver = null,
+        IProgress<NeroSystemAreaRecoveryProgress>? neroSystemAreaProgress = null)
     {
+        IReadOnlyDictionary<string, SkeletonSourceMatch> effectiveMatches = matches;
+        if (CanRecoverNeroSystemArea(inspection) && !matches.ContainsKey("SYSTEM_AREA"))
+        {
+            NeroSystemAreaRecoveryInfo info = inspection.NeroSystemAreaRecovery!;
+            activity?.Report(
+                $"NERO SYSTEM_AREA: hidden project {info.ProjectFileName} found at LBA {info.ProjectExtentLba:N0} " +
+                $"({info.ProjectDataLength:N0} bytes, {info.NeroIsoSignature}). Recovering the four private bytes from the manifest SHA-1...");
+
+            SkeletonSourceMatch generated = await RecoverNeroSystemAreaAsync(
+                inspection,
+                neroSystemAreaProgress,
+                cancellationToken).ConfigureAwait(false);
+            var augmented = new Dictionary<string, SkeletonSourceMatch>(matches, StringComparer.OrdinalIgnoreCase)
+            {
+                [generated.Entry.Path] = generated
+            };
+            effectiveMatches = augmented;
+            string privateBytes = Convert.ToHexString(generated.GeneratedPayload!.AsSpan(NeroPrivateValueOffset, 4));
+            activity?.Report(
+                $"NERO SYSTEM_AREA: recovered private bytes {privateBytes}; generated 32 KiB payload SHA-1 {generated.Sha1} MATCH");
+        }
+
         // Resurrection is deliberately performed on a worker thread.  The hot path uses
         // large synchronous sequential reads/writes and in-memory sector patching; doing
         // tiny awaited 2 KiB operations per sector is dramatically slower on both Windows
         // and Linux.  Progress<T> created by the UI still marshals reports back to the UI.
-        return Task.Run(
+        return await Task.Run(
             () => ResurrectSequential(
                 inspection,
-                matches,
+                effectiveMatches,
                 outputPath,
                 allowMissing,
                 progress,
                 activity,
                 cancellationToken,
                 eofSlackAmbiguityResolver),
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static SkeletonResurrectionResult ResurrectSequential(
@@ -53,8 +76,9 @@ public sealed partial class SkeletonResurrectionService
             throw new ArgumentException("Choose an output filename.", nameof(outputPath));
 
         string output = Path.GetFullPath(outputPath);
-        string skeleton = Path.GetFullPath(inspection.SkeletonPath);
+        string skeleton = Path.GetFullPath(inspection.EffectiveSkeletonPath);
         EnsureDifferentPaths(skeleton, output);
+        EnsureDifferentPaths(Path.GetFullPath(inspection.SkeletonPath), output);
         string partial = output + ".partial";
         EnsureDifferentPaths(skeleton, partial);
 
@@ -72,7 +96,8 @@ public sealed partial class SkeletonResurrectionService
         RedumperDatTarget? expectedDatTarget = null;
         if (inspection.SourceKind == SkeletonSourceKind.Redumper)
         {
-            expectedDatTarget = TryResolveExpectedRedumperDatTarget(skeleton, skeletonLength, activity, cancellationToken);
+            expectedDatTarget = TryResolveExpectedRedumperDatTarget(
+                inspection.SkeletonPath, skeletonLength, activity, cancellationToken);
         }
 
         activity?.Report(
@@ -121,6 +146,23 @@ public sealed partial class SkeletonResurrectionService
                 cancellationToken,
                 expectedDatTarget,
                 eofSlackAmbiguityResolver);
+
+            if (inspection.NeroSystemAreaRecovery is { DetectedFromDic: true } dicNero)
+            {
+                if (dicNero.DicKnownPrivateValue is not null || missing == 0)
+                {
+                    TryApplyDicNeroSystemArea(
+                        inspection,
+                        partial,
+                        activity,
+                        cancellationToken);
+                }
+                else
+                {
+                    activity?.Report(
+                        "NERO SYSTEM AREA: hidden DIC NRI metadata is present, but recovery is deferred until all required file payloads are restored so the whole-image hashes can identify and verify the four private bytes.");
+                }
+            }
 
             cancellationToken.ThrowIfCancellationRequested();
             if (File.Exists(output))

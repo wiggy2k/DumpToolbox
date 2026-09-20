@@ -31,7 +31,9 @@ public sealed record SkeletoolCatalogueImageContent(
     string VolumeIdentifier,
     SkeletonImageKind? ImageKind,
     IReadOnlyList<SkeletoolCatalogueImageFile> Files,
-    string ScannerKind);
+    string ScannerKind,
+    IReadOnlyList<NeroNriProjectInfo>? NeroProjects = null,
+    IReadOnlyList<string>? NeroNriWarnings = null);
 
 
 public sealed record SkeletoolCatalogueMatchSource(

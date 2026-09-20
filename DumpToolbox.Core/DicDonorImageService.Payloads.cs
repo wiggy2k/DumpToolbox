@@ -58,17 +58,25 @@ public sealed partial class DicDonorImageService
         if (exact.Length != 0)
             return null;
 
-        DicDonorFile[] projected = sameSize
+        DicDonorFile[] FindProjectedCandidates(bool allowOpaqueTildeAlias) => sameSize
             .Where(candidate => PayloadFileFlagsMatch(entry.IsoFileFlags, candidate.FileFlags))
             .Where(candidate => jolietByPrimary.TryGetValue(candidate, out DicDonorFile? donorJoliet) &&
                 aliases.Any(alias => SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
                     NormalizePath(donorJoliet.Path),
                     NormalizePath(entry.IsoOriginalPath ?? alias),
-                    namingProfile) ||
+                    namingProfile,
+                    allowOpaqueTildeAlias) ||
                     SkeletonResurrectionService.DonorJolietPathMatchesIsoCollisionAlias(
                         NormalizePath(donorJoliet.Path),
                         NormalizePath(entry.IsoOriginalPath ?? alias))))
             .ToArray();
+
+        DicDonorFile[] projected = FindProjectedCandidates(allowOpaqueTildeAlias: false);
+        if (projected.Length == 0 &&
+            JolietNamingRuleService.ProfileExplicitlyAllows(namingProfile, "OpaqueTildeAlias"))
+        {
+            projected = FindProjectedCandidates(allowOpaqueTildeAlias: true);
+        }
 
         if (projected.Length > 1 && entry.RecordingTime is DateTimeOffset expectedTime)
         {
@@ -83,19 +91,34 @@ public sealed partial class DicDonorImageService
             return null;
 
         string donorJolietPath = NormalizePath(projectedJoliet.Path);
-        int compatibleTargets = required.Count(other =>
-            other.DataLength == entry.DataLength &&
-            PayloadFileFlagsMatch(entry.IsoFileFlags, other.IsoFileFlags) &&
-            GetEntryAliases(other).Any(alias =>
-                SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
-                    donorJolietPath,
-                    NormalizePath(other.IsoOriginalPath ?? alias),
-                    namingProfile) ||
-                SkeletonResurrectionService.DonorJolietPathMatchesIsoCollisionAlias(
-                    donorJolietPath,
-                    NormalizePath(other.IsoOriginalPath ?? alias))));
+        SkeletonContentEntry[] FindCompatibleTargets(bool allowOpaqueTildeAlias) => required
+            .Where(other =>
+                other.DataLength == entry.DataLength &&
+                PayloadFileFlagsMatch(entry.IsoFileFlags, other.IsoFileFlags) &&
+                GetEntryAliases(other).Any(alias =>
+                    SkeletonResurrectionService.DonorJolietPathProjectsToIsoPath(
+                        donorJolietPath,
+                        NormalizePath(other.IsoOriginalPath ?? alias),
+                        namingProfile,
+                        allowOpaqueTildeAlias) ||
+                    SkeletonResurrectionService.DonorJolietPathMatchesIsoCollisionAlias(
+                        donorJolietPath,
+                        NormalizePath(other.IsoOriginalPath ?? alias))))
+            .ToArray();
 
-        return compatibleTargets == 1
+        SkeletonContentEntry[] compatibleTargets = FindCompatibleTargets(allowOpaqueTildeAlias: false);
+        if (compatibleTargets.Length == 0 &&
+            JolietNamingRuleService.ProfileExplicitlyAllows(namingProfile, "OpaqueTildeAlias"))
+        {
+            compatibleTargets = FindCompatibleTargets(allowOpaqueTildeAlias: true);
+        }
+
+        bool uniquelyMapsBackToCurrentEntry = compatibleTargets.Length == 1 &&
+            (ReferenceEquals(compatibleTargets[0], entry) ||
+             (compatibleTargets[0].ExtentLba == entry.ExtentLba &&
+              compatibleTargets[0].Path.Equals(entry.Path, StringComparison.OrdinalIgnoreCase)));
+
+        return uniquelyMapsBackToCurrentEntry
             ? new DonorPayloadSelection(projected[0], "Donor Joliet pathname -> DIC primary ISO9660 projection + exact size")
             : null;
     }

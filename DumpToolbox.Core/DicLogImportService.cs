@@ -784,6 +784,9 @@ public sealed partial class DicLogImportService
         Dictionary<long, byte[]> metadata = logs.MainInfoPath is null
             ? new Dictionary<long, byte[]>()
             : ParseMainInfoMetadata(logs.MainInfoPath, cancellationToken);
+        NeroSystemAreaRecoveryInfo? neroSystemAreaRecovery = logs.MainInfoPath is null
+            ? null
+            : DetectNeroProjectFromMainInfoLog(logs.MainInfoPath, metadata, cancellationToken);
         HashSet<long> exactMainInfoLbas = metadata.Keys.ToHashSet();
         int exactMainInfoOutsidePrimaryMetadata = exactMainInfoLbas.Count(lba => !volume.MetadataLbas.Contains(lba));
         if (exactMainInfoOutsidePrimaryMetadata > 0)
@@ -796,6 +799,50 @@ public sealed partial class DicLogImportService
         DicOffsetEvidenceResult offsetEvidence = logs.MainInfoPath is null
             ? new DicOffsetEvidenceResult(new Dictionary<long, DicPayloadEvidence>(), 0, 0, 0)
             : ParseMainInfoOffsetEvidence(logs.MainInfoPath, cancellationToken);
+
+        if (neroSystemAreaRecovery is not null)
+        {
+            neroSystemAreaRecovery = ApplyDicNeroSystemAreaEvidence(
+                neroSystemAreaRecovery,
+                offsetEvidence.Payloads);
+
+            string signatureEvidence = string.Equals(
+                neroSystemAreaRecovery.NeroIsoSignature,
+                "NeroISO signature not present in DIC logs",
+                StringComparison.Ordinal)
+                ? "; the NRI payload signature was not included in mainInfo"
+                : $"; payload signature {neroSystemAreaRecovery.NeroIsoSignature}";
+            warnings.Add(
+                $"Hidden Nero project record detected in exact DIC directory-sector bytes: " +
+                $"{neroSystemAreaRecovery.ProjectFileName}, LBA {neroSystemAreaRecovery.ProjectExtentLba:N0}, " +
+                $"{neroSystemAreaRecovery.ProjectDataLength:N0} bytes{signatureEvidence}.");
+
+            if (!neroSystemAreaRecovery.DicSystemAreaLayoutCompatible)
+            {
+                warnings.Add(
+                    "DIC's captured ISO system-area bytes contradict the supported 32-byte Nero layout outside the four private bytes. " +
+                    "The hidden NRI is reported, but automatic system-area reconstruction is disabled.");
+            }
+            else if (neroSystemAreaRecovery.DicKnownPrivateValue is uint knownPrivateValue)
+            {
+                warnings.Add(
+                    $"DIC offset evidence directly preserved the Nero private bytes {knownPrivateValue:X8}; " +
+                    "the complete system area can be generated without a search.");
+            }
+            else if (!string.IsNullOrWhiteSpace(disc.ImageCrc32) &&
+                     (!string.IsNullOrWhiteSpace(disc.ImageMd5) || !string.IsNullOrWhiteSpace(disc.ImageSha1)))
+            {
+                warnings.Add(
+                    "The Nero private bytes were not preserved directly. After a complete resurrection, DumpToolbox will solve them from the " +
+                    "whole-image CRC32 and accept the generated system area only when the DIC MD5/SHA-1 also matches; no 2^32 brute-force search is needed.");
+            }
+            else
+            {
+                warnings.Add(
+                    "The hidden Nero NRI is present, but DIC did not provide both a whole-image CRC32 and a cryptographic whole-image hash. " +
+                    "Its four private system-area bytes cannot be generated safely from this log set alone.");
+            }
+        }
 
         // DIC's early "Check Drive + CD offset" captures are raw/scrambled main-channel
         // reads.  When adjacent captures overlap we can stitch them into exact sectors,
@@ -1106,7 +1153,10 @@ public sealed partial class DicLogImportService
             isCooked2048Image ? new HashSet<long>() : unresolvedEccErrorLbas.ToHashSet(),
             exactMainInfoLbas,
             volume.SupplementaryDirectoryHints,
-            hfsPartitions);
+            hfsPartitions)
+        {
+            NeroSystemAreaRecovery = neroSystemAreaRecovery
+        };
 
         progress?.Report(new DicImportProgress("Complete", sectorCount, sectorCount, "DIC synthetic skeleton ready"));
         return new DicImportResult(

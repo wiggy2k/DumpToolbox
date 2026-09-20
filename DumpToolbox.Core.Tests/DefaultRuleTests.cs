@@ -55,6 +55,11 @@ public sealed class DefaultRuleTests
             EofSlackApplyMode.HashTrial,
             Assert.Single(EofSlackRuleService.FindMatches(
                 rules, string.Empty, "ROXIO BURN ENGINE 2.1", string.Empty)).ApplyMode);
+
+        EofSlackRule easyCd42 = Assert.Single(EofSlackRuleService.FindMatches(
+            rules, "CD-RTOS CD-BRIDGE", "EASY CD CREATOR 4.2 (292)", string.Empty));
+        Assert.Equal(24, easyCd42.DeltaSectors);
+        Assert.Equal(EofSlackApplyMode.HashTrial, easyCd42.ApplyMode);
     }
 
     [Fact]

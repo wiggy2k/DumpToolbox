@@ -26,22 +26,29 @@ public sealed partial class SkeletoolCatalogueService
 
         if (version == 0)
         {
-            await CreateSchemaV4Async(db, ct).ConfigureAwait(false);
+            await CreateSchemaV5Async(db, ct).ConfigureAwait(false);
         }
         else if (version == 1)
         {
             await MigrateSchemaV1ToV2Async(db, ct).ConfigureAwait(false);
             await MigrateSchemaV2ToV3Async(db, ct).ConfigureAwait(false);
             await MigrateSchemaV3ToV4Async(db, ct).ConfigureAwait(false);
+            await MigrateSchemaV4ToV5Async(db, ct).ConfigureAwait(false);
         }
         else if (version == 2)
         {
             await MigrateSchemaV2ToV3Async(db, ct).ConfigureAwait(false);
             await MigrateSchemaV3ToV4Async(db, ct).ConfigureAwait(false);
+            await MigrateSchemaV4ToV5Async(db, ct).ConfigureAwait(false);
         }
         else if (version == 3)
         {
             await MigrateSchemaV3ToV4Async(db, ct).ConfigureAwait(false);
+            await MigrateSchemaV4ToV5Async(db, ct).ConfigureAwait(false);
+        }
+        else if (version == 4)
+        {
+            await MigrateSchemaV4ToV5Async(db, ct).ConfigureAwait(false);
         }
         else if (version != SchemaVersion)
         {
@@ -74,7 +81,7 @@ public sealed partial class SkeletoolCatalogueService
         return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false)) != 0;
     }
 
-    private static async Task CreateSchemaV4Async(SqliteConnection db, CancellationToken ct)
+    private static async Task CreateSchemaV5Async(SqliteConnection db, CancellationToken ct)
     {
         using SqliteCommand cmd = db.CreateCommand();
         cmd.CommandText = @"
@@ -98,7 +105,7 @@ CREATE TABLE IF NOT EXISTS hashes(
 CREATE TABLE IF NOT EXISTS files(
  id INTEGER PRIMARY KEY, image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
  relative_path TEXT NOT NULL, hash_id INTEGER NOT NULL REFERENCES hashes(id), image_lba INTEGER, image_extents TEXT);
-INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','4');";
+INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','5');";
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         await EnsureSchemaV4IndexesAsync(db, ct).ConfigureAwait(false);
     }
@@ -209,6 +216,19 @@ ALTER TABLE files ADD COLUMN image_extents TEXT;
 -- archive/direct identity is retained, but their image contents will be re-indexed.
 UPDATE units SET last_scanned_utc=NULL WHERE id IN (SELECT DISTINCT unit_id FROM images WHERE scanner_kind='ISO9660');
 INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','4');";
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await EnsureSchemaV4IndexesAsync(db, ct).ConfigureAwait(false);
+    }
+
+    private static async Task MigrateSchemaV4ToV5Async(SqliteConnection db, CancellationToken ct)
+    {
+        using SqliteCommand cmd = db.CreateCommand();
+        cmd.CommandText = @"
+-- v5 recognises Nero's embedded hidden NRI file. Existing ISO9660 image scans did
+-- not catalogue that payload, so refresh them without invalidating archive identity.
+UPDATE units SET last_scanned_utc=NULL
+WHERE id IN (SELECT DISTINCT unit_id FROM images WHERE scanner_kind='ISO9660');
+INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','5');";
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         await EnsureSchemaV4IndexesAsync(db, ct).ConfigureAwait(false);
     }
