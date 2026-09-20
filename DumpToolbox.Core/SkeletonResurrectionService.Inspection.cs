@@ -147,6 +147,7 @@ public sealed partial class SkeletonResurrectionService
             .ToArray();
 
         NeroSystemAreaRecoveryInfo? neroSystemAreaRecovery = null;
+        KnownSystemAreaRecoveryInfo? knownSystemAreaRecovery = null;
         var neroRequirements = isoTree.NeroProjectRequirements.ToList();
         try
         {
@@ -197,15 +198,25 @@ public sealed partial class SkeletonResurrectionService
         SkeletonContentEntry? systemArea = entries.FirstOrDefault(entry => entry.SpecialKind == SkeletonSpecialKind.SystemArea);
         if (systemArea?.Sha1 is { Length: 40 } expectedSystemAreaSha1 &&
             !expectedSystemAreaSha1.Equals(ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) &&
-            isoTree.NeroProject is { } neroProject &&
-            await IsLogicalSystemAreaZeroAsync(reader, cancellationToken))
+            await IsLogicalSystemAreaZeroAsync(reader, cancellationToken).ConfigureAwait(false))
         {
-            neroSystemAreaRecovery = new NeroSystemAreaRecoveryInfo(
-                neroProject.FileName,
-                neroProject.Lba,
-                neroProject.DataLength,
-                neroProject.Signature,
-                expectedSystemAreaSha1.ToLowerInvariant());
+            if (isoTree.NeroProject is { } neroProject)
+            {
+                neroSystemAreaRecovery = new NeroSystemAreaRecoveryInfo(
+                    neroProject.FileName,
+                    neroProject.Lba,
+                    neroProject.DataLength,
+                    neroProject.Signature,
+                    expectedSystemAreaSha1.ToLowerInvariant());
+            }
+            else
+            {
+                knownSystemAreaRecovery = await TryCreateKnownSystemAreaRecoveryAsync(
+                    reader,
+                    isoTree.VolumeSpaceSize,
+                    expectedSystemAreaSha1,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
 
         return new SkeletonInspectionResult(
@@ -224,6 +235,7 @@ public sealed partial class SkeletonResurrectionService
             SkeletonInputFormat = prepared.Format,
             FilesMissingFromHashManifest = filesMissingFromHashManifest,
             NeroSystemAreaRecovery = neroSystemAreaRecovery,
+            KnownSystemAreaRecovery = knownSystemAreaRecovery,
             NeroNriWarnings = neroNriWarnings
         };
     }

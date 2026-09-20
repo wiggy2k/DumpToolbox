@@ -24,7 +24,20 @@ public sealed partial class SkeletonResurrectionService
         IProgress<NeroSystemAreaRecoveryProgress>? neroSystemAreaProgress = null)
     {
         IReadOnlyDictionary<string, SkeletonSourceMatch> effectiveMatches = matches;
-        if (CanRecoverNeroSystemArea(inspection) && !matches.ContainsKey("SYSTEM_AREA"))
+        if (CanRecoverKnownSystemArea(inspection) && !effectiveMatches.ContainsKey("SYSTEM_AREA"))
+        {
+            SkeletonSourceMatch generated = RecoverKnownSystemArea(inspection);
+            var augmented = new Dictionary<string, SkeletonSourceMatch>(effectiveMatches, StringComparer.OrdinalIgnoreCase)
+            {
+                [generated.Entry.Path] = generated
+            };
+            effectiveMatches = augmented;
+            activity?.Report(
+                $"SYSTEM_AREA: generated recognized {inspection.KnownSystemAreaRecovery!.PatternName}; " +
+                $"32 KiB payload SHA-1 {generated.Sha1} MATCH");
+        }
+
+        if (CanRecoverNeroSystemArea(inspection) && !effectiveMatches.ContainsKey("SYSTEM_AREA"))
         {
             NeroSystemAreaRecoveryInfo info = inspection.NeroSystemAreaRecovery!;
             activity?.Report(
@@ -35,7 +48,7 @@ public sealed partial class SkeletonResurrectionService
                 inspection,
                 neroSystemAreaProgress,
                 cancellationToken).ConfigureAwait(false);
-            var augmented = new Dictionary<string, SkeletonSourceMatch>(matches, StringComparer.OrdinalIgnoreCase)
+            var augmented = new Dictionary<string, SkeletonSourceMatch>(effectiveMatches, StringComparer.OrdinalIgnoreCase)
             {
                 [generated.Entry.Path] = generated
             };

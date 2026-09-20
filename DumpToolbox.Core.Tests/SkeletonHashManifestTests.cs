@@ -1,5 +1,6 @@
 using DumpToolbox.Core;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace DumpToolbox.Core.Tests;
 
@@ -30,6 +31,37 @@ public sealed class SkeletonHashManifestTests
             manifestPaths);
 
         Assert.Equal(["/DATA/ONE.BIN", "/EMPTY.DAT"], missing);
+    }
+
+    [Fact]
+    public async Task MatchesNonAsciiPrimaryIdentifierBytesInHashManifest()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"skeletool-hash-encoding-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string hashPath = Path.Combine(directory, "disc.hash");
+            const string sha1 = "0123456789abcdef0123456789abcdef01234567";
+            string manifestPath = "ARCHIVOS/ANIMAC~1/ESTÁTI~1.ANI";
+            byte[] line = Encoding.Latin1.GetBytes($"{sha1} {manifestPath}\r\n");
+            Assert.Contains((byte)0xC1, line);
+            await File.WriteAllBytesAsync(hashPath, line);
+
+            IReadOnlyList<SkeletonResurrectionService.HashManifestEntry> manifest =
+                await SkeletonResurrectionService.ReadHashManifestAsync(hashPath, CancellationToken.None);
+            string isoName = SkeletonResurrectionService.DecodePrimaryIsoIdentifier(
+                Encoding.Latin1.GetBytes("ESTÁTI~1.ANI"));
+            string isoPath = "/ARCHIVOS/ANIMAC~1/" + isoName;
+
+            Assert.Single(manifest);
+            Assert.Equal(manifestPath, manifest[0].Path);
+            Assert.Empty(SkeletonResurrectionService.FindFilesMissingFromHashManifest(
+                [isoPath], manifest.Select(entry => entry.Path)));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
     }
 
     [Fact]

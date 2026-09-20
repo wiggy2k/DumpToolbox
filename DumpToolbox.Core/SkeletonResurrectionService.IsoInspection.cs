@@ -12,14 +12,25 @@ namespace DumpToolbox.Core;
 
 public sealed partial class SkeletonResurrectionService
 {
-private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsync(
+    internal static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsync(
         string path,
         CancellationToken cancellationToken)
     {
         var entries = new List<HashManifestEntry>();
-        using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        // Redumper writes the primary ISO9660 identifier bytes directly into .hash
+        // pathnames. Those identifiers are frequently Windows-1252/Latin-1 rather
+        // than valid UTF-8 (for example C1 for Á and D1 for Ñ). Latin-1 gives every
+        // byte a stable one-to-one character mapping, matching the ISO parser below.
+        using var reader = new StreamReader(path, Encoding.Latin1, detectEncodingFromByteOrderMarks: false);
+        bool firstLine = true;
         while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
+            if (firstLine)
+            {
+                // Preserve byte-oriented parsing while tolerating an optional UTF-8 BOM.
+                line = line.TrimStart('\u00EF', '\u00BB', '\u00BF');
+                firstLine = false;
+            }
             line = line.TrimEnd('\r', '\n');
             if (string.IsNullOrWhiteSpace(line))
                 continue;
@@ -149,6 +160,7 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
 
         return new IsoTree(
             volumeIdentifier,
+            volumeSpaceSize,
             files,
             areaStarts.OrderBy(v => v).ToArray(),
             verifiedNeroProjects,
@@ -207,7 +219,7 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
             if (record.Identifier.Length == 1 && (record.Identifier[0] == 0 || record.Identifier[0] == 1))
                 continue;
 
-            string identifier = Encoding.ASCII.GetString(record.Identifier);
+            string identifier = DecodePrimaryIsoIdentifier(record.Identifier);
             string name = StripIsoVersion(identifier);
             if (string.IsNullOrWhiteSpace(name))
                 continue;
@@ -379,6 +391,9 @@ private static async Task<IReadOnlyList<HashManifestEntry>> ReadHashManifestAsyn
             return value[..semicolon];
         return value;
     }
+
+    internal static string DecodePrimaryIsoIdentifier(ReadOnlySpan<byte> identifier) =>
+        Encoding.Latin1.GetString(identifier);
 
     private static string NormalizeIsoPath(string path)
     {

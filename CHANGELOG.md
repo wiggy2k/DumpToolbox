@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.109 — 2026-09-20
+
+### Added
+
+- SkeleTool can now rebuild known repeatable `SYSTEM_AREA` layouts, including Personal RomMaker variants, `Dummy Apple Volume` Apple partition maps, and the repeated Riven all-`FF` HFS bitmap layout. Generated 32 KiB payloads are accepted only after matching the manifest SHA-1.
+
+### Fixed
+
+- SkeleTool now preserves non-ASCII primary ISO9660 identifier bytes when reading both skeletons and Redumper hash manifests, preventing accented filenames from appearing as unmatched `?`/`�` pairs.
+- SkeleTool source-image scans now hash fixed `SYSTEM_AREA` and `GAP_*` logical regions as well as ISO files, allowing an alternate ISO/BIN with matching special-region SHA-1 values to satisfy those resurrection entries.
+
 ## 0.8.108 — 2026-09-20
 
 ### Added

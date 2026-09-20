@@ -83,7 +83,7 @@ public sealed partial class SkeletonResurrectionService
             // sector protection data; it does not require an external source file.
             if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
                 (string.Equals(entry.Sha1, ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
-                 CanRecoverNeroSystemArea(inspection)))
+                 CanGenerateSystemArea(inspection)))
                 continue;
 
             if (!string.IsNullOrWhiteSpace(entry.Sha1) && !entry.Sha1.Equals(EmptySha1, StringComparison.OrdinalIgnoreCase))
@@ -113,7 +113,7 @@ public sealed partial class SkeletonResurrectionService
                         !e.IsEmpty &&
                         !(e.SpecialKind == SkeletonSpecialKind.SystemArea &&
                           (string.Equals(e.Sha1, ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
-                           CanRecoverNeroSystemArea(inspection))) &&
+                           CanGenerateSystemArea(inspection))) &&
                         !string.IsNullOrWhiteSpace(e.Sha1) &&
                         e.DataLength > 0)
             .Select(e => e.DataLength)
@@ -410,13 +410,26 @@ public sealed partial class SkeletonResurrectionService
             var expected = new Dictionary<string, List<(SkeletonContentEntry Entry, bool Xa)>>(StringComparer.OrdinalIgnoreCase);
             foreach (SkeletonContentEntry entry in inspection.Entries.Where(e => e.CanRestore && !e.IsEmpty))
             {
+                // SYSTEM_AREA and GAP hashes describe fixed image regions rather than
+                // ISO directory records. Scan those regions explicitly below so an
+                // unrelated same-hash file can never satisfy a special entry.
+                if (entry.SpecialKind is SkeletonSpecialKind.SystemArea or SkeletonSpecialKind.Gap)
+                    continue;
                 if (IsSha1(entry.Sha1)) AddExpected(expected, entry.Sha1!, entry, false);
                 if (IsSha1(entry.XaSha1)) AddExpected(expected, entry.XaSha1!, entry, true);
             }
 
             var matches = new Dictionary<string, SkeletonSourceMatch>(StringComparer.OrdinalIgnoreCase);
             IReadOnlyList<IsoFileExtent> scanFiles = IncludeVerifiedNeroProjects(tree);
-            long totalBytes = scanFiles.Sum(f => f.LogicalLength);
+            SkeletonContentEntry[] specialEntries = inspection.Entries
+                .Where(entry => entry.CanRestore &&
+                                !entry.IsEmpty &&
+                                entry.SpecialKind is SkeletonSpecialKind.SystemArea or SkeletonSpecialKind.Gap &&
+                                IsSha1(entry.Sha1) &&
+                                entry.DataLength > 0)
+                .ToArray();
+            int totalItems = scanFiles.Count + specialEntries.Length;
+            long totalBytes = checked(scanFiles.Sum(f => f.LogicalLength) + specialEntries.Sum(entry => entry.DataLength));
             long processedBytes = 0;
             int processed = 0;
 
@@ -442,7 +455,7 @@ public sealed partial class SkeletonResurrectionService
                 catch (InvalidOperationException)
                 {
                     processedBytes += file.LogicalLength; processed++;
-                    progress?.Report(new SkeletonSourceScanProgress(processed, scanFiles.Count, processedBytes, totalBytes, file.Path, FilesSkipped: 1));
+                    progress?.Report(new SkeletonSourceScanProgress(processed, totalItems, processedBytes, totalBytes, file.Path, FilesSkipped: 1));
                     continue;
                 }
 
@@ -455,7 +468,7 @@ public sealed partial class SkeletonResurrectionService
                 {
                     progress?.Report(new SkeletonSourceScanProgress(
                         processed,
-                        scanFiles.Count,
+                        totalItems,
                         processedBytes,
                         totalBytes,
                         file.Path,
@@ -476,18 +489,102 @@ public sealed partial class SkeletonResurrectionService
                             continue;
                         matches[entry.Path] = new SkeletonSourceMatch(matchedEntry, imagePath, sha1, false,
                             "ISO/BIN image logical file SHA1", file.Path, file.Lba, file.LogicalLength, SourceImageExtents: file.LogicalExtents);
-                        progress?.Report(new SkeletonSourceScanProgress(processed, scanFiles.Count, processedBytes, totalBytes,
+                        progress?.Report(new SkeletonSourceScanProgress(processed, totalItems, processedBytes, totalBytes,
                             file.Path, entry.Path, $"{imagePath}::{file.Path}", false));
                     }
                 }
 
                 processedBytes += file.LogicalLength; processed++;
-                progress?.Report(new SkeletonSourceScanProgress(processed, scanFiles.Count, processedBytes, totalBytes, file.Path,
+                progress?.Report(new SkeletonSourceScanProgress(processed, totalItems, processedBytes, totalBytes, file.Path,
                     BytesHashed: processedBytes, FilesHashed: processed));
+            }
+
+            foreach (SkeletonContentEntry entry in specialEntries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string displayPath = $"{imagePath}::{entry.Path}";
+                string? sha1 = null;
+                try
+                {
+                    sha1 = await CalculateSourceImageRegionSha1Async(
+                        reader,
+                        entry.ExtentLba,
+                        entry.DataLength,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or EndOfStreamException or OverflowException)
+                {
+                    // A differently laid-out pressing may not have this target region,
+                    // or may store it in a sector mode that cannot satisfy the normal
+                    // Form1 hash. It is simply not a match.
+                }
+
+                if (sha1 is not null && sha1.Equals(entry.Sha1, StringComparison.OrdinalIgnoreCase))
+                {
+                    var extents = new[] { new SkeletonSourceImageExtent(entry.ExtentLba, entry.DataLength) };
+                    string regionName = entry.SpecialKind == SkeletonSpecialKind.SystemArea
+                        ? "SYSTEM_AREA"
+                        : "GAP";
+                    matches[entry.Path] = new SkeletonSourceMatch(
+                        entry,
+                        imagePath,
+                        sha1,
+                        false,
+                        $"ISO/BIN image {regionName} logical payload SHA1",
+                        entry.Path,
+                        entry.ExtentLba,
+                        entry.DataLength,
+                        SourceImageExtents: extents);
+                    progress?.Report(new SkeletonSourceScanProgress(
+                        processed,
+                        totalItems,
+                        processedBytes,
+                        totalBytes,
+                        entry.Path,
+                        entry.Path,
+                        displayPath,
+                        false));
+                }
+
+                processedBytes += entry.DataLength;
+                processed++;
+                progress?.Report(new SkeletonSourceScanProgress(
+                    processed,
+                    totalItems,
+                    processedBytes,
+                    totalBytes,
+                    entry.Path,
+                    BytesHashed: processedBytes,
+                    FilesHashed: processed,
+                    FilesSkipped: sha1 is null ? 1 : 0));
             }
 
             return (IReadOnlyDictionary<string, SkeletonSourceMatch>)matches;
         }, cancellationToken);
+
+    private static async Task<string> CalculateSourceImageRegionSha1Async(
+        SkeletonImageReader reader,
+        long startLba,
+        long byteLength,
+        CancellationToken cancellationToken)
+    {
+        if (byteLength <= 0)
+            throw new InvalidOperationException("Image region length must be positive.");
+
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+        long remaining = byteLength;
+        long lba = startLba;
+        while (remaining > 0)
+        {
+            byte[] sector = await reader.ReadForm1SectorAsync(lba, cancellationToken).ConfigureAwait(false);
+            int count = checked((int)Math.Min((long)sector.Length, remaining));
+            hash.AppendData(sector, 0, count);
+            remaining -= count;
+            lba++;
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
 
     internal static async Task<string?> TryReadStandaloneNeroSignatureAsync(
         string path,

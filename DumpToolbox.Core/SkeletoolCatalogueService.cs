@@ -212,7 +212,7 @@ RETURNING id;";
                          e.CanRestore &&
                          !e.IsEmpty &&
                          !(e.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                           SkeletonResurrectionService.CanRecoverNeroSystemArea(inspection))))
+                           SkeletonResurrectionService.CanGenerateSystemArea(inspection))))
             {
                 foreach ((string? hash, bool xa) in new[] { (entry.Sha1, false), (entry.XaSha1, true) })
                 {

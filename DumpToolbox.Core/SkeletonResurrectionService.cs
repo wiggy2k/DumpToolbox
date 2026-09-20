@@ -96,6 +96,7 @@ public sealed record SkeletonInspectionResult(
     public IReadOnlyList<string> FilesMissingFromHashManifest { get; init; } = Array.Empty<string>();
     public int MissingHashEntryCount => FilesMissingFromHashManifest.Count;
     public NeroSystemAreaRecoveryInfo? NeroSystemAreaRecovery { get; init; }
+    public KnownSystemAreaRecoveryInfo? KnownSystemAreaRecovery { get; init; }
     public IReadOnlyList<string> NeroNriWarnings { get; init; } = Array.Empty<string>();
 }
 
@@ -150,6 +151,11 @@ public sealed record NeroSystemAreaRecoveryProgress(
         ? 0
         : CandidatesTested / Elapsed.TotalSeconds;
 }
+
+public sealed record KnownSystemAreaRecoveryInfo(
+    string PatternName,
+    string ExpectedSystemAreaSha1,
+    byte[] Payload);
 
 public sealed record DicHfsPartitionInspection(
     string Name,
@@ -326,7 +332,7 @@ public sealed partial class SkeletonResurrectionService
         public string Sha1 { get; set; } = string.Empty;
     }
 
-    private sealed record HashManifestEntry(string Sha1, string Path);
+    internal sealed record HashManifestEntry(string Sha1, string Path);
     private sealed record IsoFileExtent(string Path, uint Lba, uint Length, IReadOnlyList<SkeletonSourceImageExtent>? Extents = null)
     {
         public IReadOnlyList<SkeletonSourceImageExtent> LogicalExtents => Extents is { Count: > 0 }
@@ -337,6 +343,7 @@ public sealed partial class SkeletonResurrectionService
     }
     private sealed record IsoTree(
         string VolumeIdentifier,
+        uint VolumeSpaceSize,
         IReadOnlyList<IsoFileExtent> Files,
         IReadOnlyList<uint> AreaStarts,
         IReadOnlyList<NeroProjectEntry> NeroProjects,

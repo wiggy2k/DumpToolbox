@@ -10,11 +10,13 @@ SkeleTool is an independent implementation of the Redumper skeleton/hash restora
 4. Review found, missing, special and XA/Form 2 entries.
 5. Resurrect to a new output image.
 
-Source filenames do not need to match the image: normal files are matched by SHA-1 and logical size. `SYSTEM_AREA`, `GAP_#######`, and alternate `.XA` payload hashes are recognised.
+Source filenames do not need to match the image: normal files are matched by SHA-1 and logical size. A source ISO/BIN scan also hashes the target `SYSTEM_AREA` and `GAP_#######` logical regions at their recorded LBAs, so matching regions from an alternate pressing can be restored directly. Alternate `.XA` payload hashes are recognised from suitable raw source files.
 
 Historical raw-LZMA skeletons are detected from their content even when they still use the `.skeleton` extension. Zstandard streams and skeletons stored in 7z, ZIP, RAR, gzip, bzip2, XZ, or TAR archives are also accepted. An archive must contain one `.skeleton` entry, or a uniquely matching entry when several are present. SkeleTool expands it beside the selected input, shows load progress, and leaves the compressed file unchanged. A compressed file already named `name.skeleton` uses `name.skeleton.temp`; a wrapper such as `name.skeleton.zst` uses `name.skeleton`. If that working filename already exists, a numbered `.temp` name is used without overwriting it.
 
 When a skeleton contains Nero's hidden `!!MSxxxx.NRI` project record and a verified `NeroISO` payload, SkeleTool can regenerate the associated 32-byte record in sector 15 automatically. The filename, extent and length come from the hidden directory record; the four Nero-private bytes are recovered against the manifest's `SYSTEM_AREA` SHA-1. Resurrection displays a cancellable progress window with search rate and worst-case remaining time. The generated 32 KiB system area is accepted only after its SHA-1 matches the manifest.
+
+SkeleTool also recognises repeatable mastering layouts that do not require an external `SYSTEM_AREA` file. These include known Personal RomMaker sector strings, `Dummy Apple Volume` records, three-entry Apple partition maps whose geometry can be recovered from the surviving classic-HFS header, and the repeated Riven HFS bitmap layout containing all-`FF` sectors. The complete generated 32 KiB area must match the manifest SHA-1; a partial signature or merely non-zero system area is never accepted as proof.
 
 If direct Nero evidence references an NRI payload that is missing or lacks a valid length-prefixed `NeroISO` signature, SkeleTool loads with a visible warning explaining that the NRI payload cannot be generated and an exact source image or NRI file is required. Direct evidence means an embedded `!!MSxxxx.NRI` directory record or a structurally valid Nero sector-15 record; an arbitrary non-zero `SYSTEM_AREA` never triggers the warning.
 

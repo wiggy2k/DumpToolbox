@@ -196,6 +196,11 @@ public partial class MainWindow : Window
                     $"NERO SYSTEM_AREA: hidden project {nero.ProjectFileName} detected at LBA {nero.ProjectExtentLba:N0} " +
                     $"({nero.ProjectDataLength:N0} bytes, {nero.NeroIsoSignature}). Its missing four-byte system-area value will be recovered during resurrection.");
             }
+            if (inspection.KnownSystemAreaRecovery is { } knownSystemArea)
+            {
+                AppendSkeletonLog(
+                    $"SYSTEM_AREA: recognized '{knownSystemArea.PatternName}'. The complete 32 KiB payload was generated and verified against the manifest SHA-1.");
+            }
             foreach (string warning in inspection.NeroNriWarnings)
                 AppendSkeletonLog("WARNING — NERO NRI: " + warning);
 
@@ -461,11 +466,11 @@ public partial class MainWindow : Window
 
     private static int CountSkeletonRequiredMatches(SkeletonInspectionResult inspection)
     {
-        bool neroSystemAreaIsGenerated = SkeletonResurrectionService.CanRecoverNeroSystemArea(inspection);
+        bool systemAreaIsGenerated = SkeletonResurrectionService.CanGenerateSystemArea(inspection);
         return inspection.Entries.Count(e => e.CanRestore && !e.IsEmpty &&
             !(e.SpecialKind == SkeletonSpecialKind.SystemArea &&
               (string.Equals(e.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
-               neroSystemAreaIsGenerated)) &&
+               systemAreaIsGenerated)) &&
             (!string.IsNullOrWhiteSpace(e.Sha1) || !string.IsNullOrWhiteSpace(e.XaSha1)));
     }
 
@@ -625,6 +630,12 @@ public partial class MainWindow : Window
                     node.Status = "NRI";
                     node.SourcePath = $"Will generate from {inspection.NeroSystemAreaRecovery!.ProjectFileName}";
                 }
+                else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
+                         SkeletonResurrectionService.CanRecoverKnownSystemArea(inspection))
+                {
+                    node.Status = "GEN";
+                    node.SourcePath = $"Will generate {inspection.KnownSystemAreaRecovery!.PatternName}";
+                }
                 specialRoot.Children.Add(node);
                 _skeletonNodes[entry.Path] = node;
             }
@@ -690,7 +701,7 @@ public partial class MainWindow : Window
             else if (entry.CanRestore && !entry.IsEmpty &&
                      !(entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
                        (string.Equals(entry.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
-                        SkeletonResurrectionService.CanRecoverNeroSystemArea(_skeletonInspection))) &&
+                        SkeletonResurrectionService.CanGenerateSystemArea(_skeletonInspection))) &&
                      (!string.IsNullOrWhiteSpace(entry.Sha1) || !string.IsNullOrWhiteSpace(entry.XaSha1)))
             {
                 node.Status = "✗";
@@ -701,6 +712,12 @@ public partial class MainWindow : Window
             {
                 node.Status = "NRI";
                 node.SourcePath = $"Will generate from {_skeletonInspection.NeroSystemAreaRecovery!.ProjectFileName}";
+            }
+            else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
+                     SkeletonResurrectionService.CanRecoverKnownSystemArea(_skeletonInspection))
+            {
+                node.Status = "GEN";
+                node.SourcePath = $"Will generate {_skeletonInspection.KnownSystemAreaRecovery!.PatternName}";
             }
         }
     }
