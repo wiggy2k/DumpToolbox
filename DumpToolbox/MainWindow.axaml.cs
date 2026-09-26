@@ -31,7 +31,8 @@ public partial class MainWindow : Window
     private readonly DicDonorImageService _dicDonorImageService = new();
     private readonly DicRecoveryStateService _dicRecoveryStateService = new();
     private readonly ObservableCollection<string> _concatenateFiles = new();
-    private readonly ObservableCollection<SkeletonTreeNode> _skeletonTreeRoots = new();
+    private readonly ObservableCollection<SkeletonTreeNode> _skeletonMatchedTreeRoots = new();
+    private readonly ObservableCollection<SkeletonTreeNode> _skeletonOutstandingTreeRoots = new();
     private readonly Dictionary<string, SkeletonTreeNode> _skeletonNodes = new(StringComparer.OrdinalIgnoreCase);
 
     private SkeletonInspectionResult? _skeletonInspection;
@@ -68,7 +69,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         ApplyApplicationTitle();
         ConcatFilesList.ItemsSource = _concatenateFiles;
-        SkeletonTree.ItemsSource = _skeletonTreeRoots;
+        SkeletonMatchedTree.ItemsSource = _skeletonMatchedTreeRoots;
+        SkeletonOutstandingTree.ItemsSource = _skeletonOutstandingTreeRoots;
         InitializeAudioRecoveryTab();
         InitializeIsoExtractorTab();
         InitializeDicTab();

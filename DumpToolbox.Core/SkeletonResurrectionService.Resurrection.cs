@@ -37,25 +37,61 @@ public sealed partial class SkeletonResurrectionService
                 $"32 KiB payload SHA-1 {generated.Sha1} MATCH");
         }
 
+        long skeletonLength = new FileInfo(inspection.EffectiveSkeletonPath).Length;
+        RedumperDatTarget? expectedDatTarget = inspection.SourceKind == SkeletonSourceKind.Redumper
+            ? TryResolveExpectedRedumperDatTarget(
+                inspection.SkeletonPath,
+                skeletonLength,
+                activity,
+                cancellationToken)
+            : null;
+        bool hasUsableRedumperCrc = expectedDatTarget is not null &&
+            uint.TryParse(expectedDatTarget.Crc32, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out _);
+        int missingBeforeGeneratedSystemArea = CountMissingRequired(inspection, effectiveMatches);
+        bool deferNeroToWholeImageCrc =
+            CanRecoverNeroSystemArea(inspection) &&
+            !effectiveMatches.ContainsKey("SYSTEM_AREA") &&
+            hasUsableRedumperCrc &&
+            missingBeforeGeneratedSystemArea == 0;
+
         if (CanRecoverNeroSystemArea(inspection) && !effectiveMatches.ContainsKey("SYSTEM_AREA"))
         {
             NeroSystemAreaRecoveryInfo info = inspection.NeroSystemAreaRecovery!;
-            activity?.Report(
-                $"NERO SYSTEM_AREA: hidden project {info.ProjectFileName} found at LBA {info.ProjectExtentLba:N0} " +
-                $"({info.ProjectDataLength:N0} bytes, {info.NeroIsoSignature}). Recovering the four private bytes from the manifest SHA-1...");
-
-            SkeletonSourceMatch generated = await RecoverNeroSystemAreaAsync(
-                inspection,
-                neroSystemAreaProgress,
-                cancellationToken).ConfigureAwait(false);
-            var augmented = new Dictionary<string, SkeletonSourceMatch>(effectiveMatches, StringComparer.OrdinalIgnoreCase)
+            if (deferNeroToWholeImageCrc)
             {
-                [generated.Entry.Path] = generated
-            };
-            effectiveMatches = augmented;
-            string privateBytes = Convert.ToHexString(generated.GeneratedPayload!.AsSpan(NeroPrivateValueOffset, 4));
-            activity?.Report(
-                $"NERO SYSTEM_AREA: recovered private bytes {privateBytes}; generated 32 KiB payload SHA-1 {generated.Sha1} MATCH");
+                activity?.Report(
+                    $"NERO SYSTEM_AREA: hidden project {info.ProjectFileName} found at LBA {info.ProjectExtentLba:N0} " +
+                    $"({info.ProjectDataLength:N0} bytes, {info.NeroIsoSignature}). The four private bytes will be solved " +
+                    "from the whole-image CRC32 after all other payloads are restored, then verified against the manifest SYSTEM_AREA SHA-1.");
+            }
+            else
+            {
+                if (inspection.SourceKind == SkeletonSourceKind.Redumper)
+                {
+                    string reason = !hasUsableRedumperCrc
+                        ? "no matching Redumper DAT whole-image CRC32 was found beside the skeleton"
+                        : $"{missingBeforeGeneratedSystemArea:N0} other required payload(s) are still missing";
+                    activity?.Report(
+                        $"NERO SYSTEM_AREA: CRC32 fast path unavailable because {reason}; " +
+                        "using the vectorized manifest SHA-1 fallback.");
+                }
+                activity?.Report(
+                    $"NERO SYSTEM_AREA: hidden project {info.ProjectFileName} found at LBA {info.ProjectExtentLba:N0} " +
+                    $"({info.ProjectDataLength:N0} bytes, {info.NeroIsoSignature}). Recovering the four private bytes from the manifest SHA-1...");
+
+                SkeletonSourceMatch generated = await RecoverNeroSystemAreaAsync(
+                    inspection,
+                    neroSystemAreaProgress,
+                    cancellationToken).ConfigureAwait(false);
+                var augmented = new Dictionary<string, SkeletonSourceMatch>(effectiveMatches, StringComparer.OrdinalIgnoreCase)
+                {
+                    [generated.Entry.Path] = generated
+                };
+                effectiveMatches = augmented;
+                string privateBytes = Convert.ToHexString(generated.GeneratedPayload!.AsSpan(NeroPrivateValueOffset, 4));
+                activity?.Report(
+                    $"NERO SYSTEM_AREA: recovered private bytes {privateBytes}; generated 32 KiB payload SHA-1 {generated.Sha1} MATCH");
+            }
         }
 
         // Resurrection is deliberately performed on a worker thread.  The hot path uses
@@ -71,7 +107,9 @@ public sealed partial class SkeletonResurrectionService
                 progress,
                 activity,
                 cancellationToken,
-                eofSlackAmbiguityResolver),
+                eofSlackAmbiguityResolver,
+                expectedDatTarget,
+                neroSystemAreaProgress),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -83,7 +121,9 @@ public sealed partial class SkeletonResurrectionService
         IProgress<SkeletonResurrectionProgress>? progress,
         IProgress<string>? activity,
         CancellationToken cancellationToken,
-        Func<EofSlackAmbiguityRequest, CancellationToken, Task<EofSlackAmbiguityDecision>>? eofSlackAmbiguityResolver)
+        Func<EofSlackAmbiguityRequest, CancellationToken, Task<EofSlackAmbiguityDecision>>? eofSlackAmbiguityResolver,
+        RedumperDatTarget? expectedDatTarget,
+        IProgress<NeroSystemAreaRecoveryProgress>? neroSystemAreaProgress)
     {
         if (string.IsNullOrWhiteSpace(outputPath))
             throw new ArgumentException("Choose an output filename.", nameof(outputPath));
@@ -105,13 +145,6 @@ public sealed partial class SkeletonResurrectionService
 
         TryDelete(partial);
         long skeletonLength = new FileInfo(skeleton).Length;
-
-        RedumperDatTarget? expectedDatTarget = null;
-        if (inspection.SourceKind == SkeletonSourceKind.Redumper)
-        {
-            expectedDatTarget = TryResolveExpectedRedumperDatTarget(
-                inspection.SkeletonPath, skeletonLength, activity, cancellationToken);
-        }
 
         activity?.Report(
             inspection.ImageKind == SkeletonImageKind.Raw2352
@@ -159,6 +192,52 @@ public sealed partial class SkeletonResurrectionService
                 cancellationToken,
                 expectedDatTarget,
                 eofSlackAmbiguityResolver);
+
+            if (inspection.SourceKind == SkeletonSourceKind.Redumper &&
+                inspection.NeroSystemAreaRecovery is not null &&
+                !matches.ContainsKey("SYSTEM_AREA") &&
+                expectedDatTarget is not null &&
+                uint.TryParse(
+                    expectedDatTarget.Crc32,
+                    NumberStyles.AllowHexSpecifier,
+                    CultureInfo.InvariantCulture,
+                    out uint targetCrc32))
+            {
+                bool recovered = TryApplyRedumperNeroSystemArea(
+                    inspection,
+                    partial,
+                    targetCrc32,
+                    activity,
+                    neroSystemAreaProgress,
+                    cancellationToken);
+                if (!recovered)
+                {
+                    activity?.Report(
+                        "NERO SYSTEM_AREA: whole-image CRC32 recovery did not pass the manifest SYSTEM_AREA SHA-1; " +
+                        "falling back to the exhaustive SHA-1 search.");
+                    uint? privateValue = FindNeroPrivateValue(
+                        inspection.NeroSystemAreaRecovery,
+                        0,
+                        NeroPrivateValueCount,
+                        neroSystemAreaProgress,
+                        cancellationToken);
+                    if (privateValue is null)
+                    {
+                        throw new InvalidOperationException(
+                            "No four-byte Nero private value produced the expected SYSTEM_AREA SHA-1.");
+                    }
+
+                    ApplyNeroSystemAreaForPrivateValue(
+                        inspection,
+                        partial,
+                        privateValue.Value,
+                        cancellationToken);
+                    activity?.Report(
+                        $"NERO SYSTEM_AREA: SHA-1 fallback recovered private bytes {privateValue.Value:X8}; " +
+                        "generated 32 KiB payload SHA-1 MATCH.");
+                }
+                restored++;
+            }
 
             if (inspection.NeroSystemAreaRecovery is { DetectedFromDic: true } dicNero)
             {
@@ -1934,7 +2013,8 @@ public sealed partial class SkeletonResurrectionService
             if (!entry.CanRestore || entry.IsEmpty)
                 continue;
             if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                string.Equals(entry.Sha1, ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase))
+                (string.Equals(entry.Sha1, ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
+                 CanGenerateSystemArea(inspection)))
                 continue;
             if (!entry.RequiresSource && string.IsNullOrWhiteSpace(entry.Sha1) && string.IsNullOrWhiteSpace(entry.XaSha1))
                 continue;

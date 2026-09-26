@@ -1,11 +1,151 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
+using System.Security.Cryptography;
 
 namespace DumpToolbox.Core;
 
 public sealed partial class SkeletonResurrectionService
 {
+    internal static bool TryApplyRedumperNeroSystemArea(
+        SkeletonInspectionResult inspection,
+        string imagePath,
+        uint targetCrc32,
+        IProgress<string>? activity = null,
+        IProgress<NeroSystemAreaRecoveryProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        NeroSystemAreaRecoveryInfo? info = inspection.NeroSystemAreaRecovery;
+        if (inspection.SourceKind != SkeletonSourceKind.Redumper || info is null)
+            return false;
+
+        int regionLength = inspection.ImageKind == SkeletonImageKind.Cooked2048
+            ? NeroSystemAreaBytes
+            : SystemAreaSectors * RawSectorSize;
+        long imageLength = new FileInfo(imagePath).Length;
+        if (imageLength < regionLength)
+            return false;
+
+        byte[] originalRegion = ReadFilePrefix(imagePath, regionLength, cancellationToken);
+        bool keepGeneratedRegion = false;
+        bool regionWasWritten = false;
+        var stopwatch = Stopwatch.StartNew();
+        progress?.Report(new NeroSystemAreaRecoveryProgress(
+            0,
+            32,
+            TimeSpan.Zero,
+            UsesWholeImageCrc32: true));
+
+        try
+        {
+            activity?.Report(
+                "NERO SYSTEM_AREA: solving the four private bytes from the Redumper whole-image CRC32 " +
+                "using 32 raw-sector influence vectors.");
+
+            byte[] baselineRegion = BuildNeroPhysicalSystemArea(
+                inspection,
+                info,
+                privateValue: 0,
+                originalRegion);
+            WriteFilePrefix(imagePath, baselineRegion, cancellationToken);
+            regionWasWritten = true;
+
+            uint baselineImageCrc = ComputeFileCrc32(imagePath, cancellationToken);
+            uint baselineRegionCrc = Crc32.Compute(baselineRegion);
+            Crc32.ShiftOperator suffixShift = Crc32.CreateShiftOperator(imageLength - regionLength);
+            var effects = new uint[32];
+
+            for (int bit = 0; bit < 32; bit++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                byte[] candidateRegion = BuildNeroPhysicalSystemArea(
+                    inspection,
+                    info,
+                    1u << bit,
+                    originalRegion);
+                uint regionDifference = Crc32.Compute(candidateRegion) ^ baselineRegionCrc;
+                effects[bit] = suffixShift.Apply(regionDifference);
+                progress?.Report(new NeroSystemAreaRecoveryProgress(
+                    bit + 1,
+                    32,
+                    stopwatch.Elapsed,
+                    UsesWholeImageCrc32: true));
+            }
+
+            if (!TrySolveCrc32Patch(effects, targetCrc32 ^ baselineImageCrc, out uint privateValue))
+            {
+                activity?.Report(
+                    "NERO SYSTEM_AREA: the Redumper whole-image CRC32 did not yield a supported four-byte value.");
+                return false;
+            }
+
+            byte[] logicalSystemArea = BuildNeroSystemAreaForPrivateValue(info, privateValue);
+            string actualSystemAreaSha1 = Convert.ToHexString(SHA1.HashData(logicalSystemArea)).ToLowerInvariant();
+            if (!actualSystemAreaSha1.Equals(info.ExpectedSystemAreaSha1, StringComparison.OrdinalIgnoreCase))
+            {
+                activity?.Report(
+                    $"NERO SYSTEM_AREA: CRC32 produced candidate private bytes {privateValue:X8}, but its 32 KiB " +
+                    $"SYSTEM_AREA SHA-1 {actualSystemAreaSha1} did not match the manifest. The candidate was rejected.");
+                return false;
+            }
+
+            byte[] finalRegion = BuildNeroPhysicalSystemArea(
+                inspection,
+                info,
+                privateValue,
+                originalRegion);
+            WriteFilePrefix(imagePath, finalRegion, cancellationToken);
+            regionWasWritten = true;
+            keepGeneratedRegion = true;
+            progress?.Report(new NeroSystemAreaRecoveryProgress(
+                32,
+                32,
+                stopwatch.Elapsed,
+                privateValue,
+                UsesWholeImageCrc32: true));
+            activity?.Report(
+                $"NERO SYSTEM_AREA: CRC32 recovered private bytes {privateValue:X8}; " +
+                $"generated 32 KiB payload SHA-1 {actualSystemAreaSha1} MATCH.");
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            activity?.Report(
+                $"NERO SYSTEM_AREA: Redumper CRC32 reconstruction was not applied: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            if (regionWasWritten && !keepGeneratedRegion)
+                WriteFilePrefix(imagePath, originalRegion, CancellationToken.None);
+        }
+    }
+
+    internal static void ApplyNeroSystemAreaForPrivateValue(
+        SkeletonInspectionResult inspection,
+        string imagePath,
+        uint privateValue,
+        CancellationToken cancellationToken = default)
+    {
+        NeroSystemAreaRecoveryInfo info = inspection.NeroSystemAreaRecovery
+            ?? throw new InvalidOperationException("The image has no Nero system-area recovery information.");
+        int regionLength = inspection.ImageKind == SkeletonImageKind.Cooked2048
+            ? NeroSystemAreaBytes
+            : SystemAreaSectors * RawSectorSize;
+        byte[] originalRegion = ReadFilePrefix(imagePath, regionLength, cancellationToken);
+        byte[] generatedRegion = BuildNeroPhysicalSystemArea(
+            inspection,
+            info,
+            privateValue,
+            originalRegion);
+        WriteFilePrefix(imagePath, generatedRegion, cancellationToken);
+    }
+
     internal static bool TryApplyDicNeroSystemArea(
         SkeletonInspectionResult inspection,
         string imagePath,
@@ -58,7 +198,7 @@ public sealed partial class SkeletonResurrectionService
                     "NERO SYSTEM AREA: solving the four private bytes from the final DIC whole-image CRC32; " +
                     "the result will be retained only if MD5/SHA-1 also verifies.");
 
-                byte[] baselineRegion = BuildDicNeroPhysicalSystemArea(
+                byte[] baselineRegion = BuildNeroPhysicalSystemArea(
                     inspection,
                     info,
                     privateValue: 0,
@@ -74,7 +214,7 @@ public sealed partial class SkeletonResurrectionService
                 for (int bit = 0; bit < 32; bit++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    byte[] candidateRegion = BuildDicNeroPhysicalSystemArea(
+                    byte[] candidateRegion = BuildNeroPhysicalSystemArea(
                         inspection,
                         info,
                         1u << bit,
@@ -92,7 +232,7 @@ public sealed partial class SkeletonResurrectionService
                 }
             }
 
-            byte[] finalRegion = BuildDicNeroPhysicalSystemArea(
+            byte[] finalRegion = BuildNeroPhysicalSystemArea(
                 inspection,
                 info,
                 privateValue,
@@ -162,7 +302,7 @@ public sealed partial class SkeletonResurrectionService
         }
     }
 
-    private static byte[] BuildDicNeroPhysicalSystemArea(
+    private static byte[] BuildNeroPhysicalSystemArea(
         SkeletonInspectionResult inspection,
         NeroSystemAreaRecoveryInfo info,
         uint privateValue,

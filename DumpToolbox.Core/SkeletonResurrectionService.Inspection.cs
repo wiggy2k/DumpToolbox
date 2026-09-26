@@ -87,6 +87,7 @@ public sealed partial class SkeletonResurrectionService
             if (byPath.TryGetValue(manifestPath, out EntryBuilder? target))
             {
                 target.Sha1 = item.Sha1;
+                target.ManifestPath = item.Path;
                 continue;
             }
 
@@ -96,6 +97,7 @@ public sealed partial class SkeletonResurrectionService
                 if (byPath.TryGetValue(basePath, out EntryBuilder? xaTarget))
                 {
                     xaTarget.XaSha1 = item.Sha1;
+                    xaTarget.XaManifestPath = item.Path;
                     continue;
                 }
             }
@@ -109,7 +111,8 @@ public sealed partial class SkeletonResurrectionService
                     SkeletonSpecialKind.SystemArea,
                     true)
                 {
-                    Sha1 = item.Sha1
+                    Sha1 = item.Sha1,
+                    ManifestPath = item.Path
                 };
                 continue;
             }
@@ -126,15 +129,22 @@ public sealed partial class SkeletonResurrectionService
                 }
 
                 if (gapXa)
+                {
                     gapTarget.XaSha1 = item.Sha1;
+                    gapTarget.XaManifestPath = item.Path;
+                }
                 else
+                {
                     gapTarget.Sha1 = item.Sha1;
+                    gapTarget.ManifestPath = item.Path;
+                }
                 continue;
             }
 
             var unknown = new EntryBuilder(manifestPath, 0, 0, SkeletonSpecialKind.UnmappedHashEntry, false)
             {
-                Sha1 = item.Sha1
+                Sha1 = item.Sha1,
+                ManifestPath = item.Path
             };
             unmapped.Add(unknown);
         }

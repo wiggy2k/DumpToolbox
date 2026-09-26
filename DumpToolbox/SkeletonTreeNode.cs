@@ -81,7 +81,9 @@ public sealed class SkeletonTreeNode : INotifyPropertyChanged
 
     public IBrush? StatusForeground =>
         Status.StartsWith("✓", StringComparison.Ordinal) ? Brushes.LimeGreen :
-        string.Equals(Status, "✗", StringComparison.Ordinal) ? Brushes.Red :
+        Status.StartsWith("✗", StringComparison.Ordinal) ? Brushes.Red :
+        Status.StartsWith("?", StringComparison.Ordinal) ? Brushes.DarkOrange :
+        string.Equals(Status, "IGNORED", StringComparison.Ordinal) ||
         string.Equals(Status, "Ignored", StringComparison.Ordinal) ? Brushes.Gray :
         null;
 

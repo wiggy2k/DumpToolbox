@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.110 — 2026-09-26
+
+### Added
+
+- SkeleTool can save a text fix report with separate `HAVE` and `MISS` lists, using each entry's SHA-1 and original pathname from the Redumper `.hash` manifest. XA matches report the exact `.XA` hash/path variant, while skeleton files absent from the manifest are identified explicitly.
+
+### Changed
+
+- SkeleTool now separates matched/ready entries from still-needed/unknown entries in two independently scrollable trees. Each view preserves the ISO directory hierarchy, shows descriptive colour-coded statuses and summary counts, and is rebuilt after source or catalogue matching.
+- SkeleTool now solves Nero's four private `SYSTEM_AREA` bytes directly from a matching Redumper whole-image CRC32 after restoring the other payloads, including each candidate's raw-sector EDC/ECC effects. The derived value is accepted only when the generated 32 KiB `SYSTEM_AREA` matches the manifest SHA-1; the vectorized SHA-1 search remains available as an automatic fallback.
+
 ## 0.8.109 — 2026-09-20
 
 ### Added

@@ -47,7 +47,9 @@ public sealed record SkeletonContentEntry(
     string? IsoOriginalPath = null,
     uint? IsoRecordExtentLba = null,
     byte IsoFileFlags = 0,
-    IReadOnlyList<SkeletonAlternateIsoRecord>? AlternateIsoRecords = null)
+    IReadOnlyList<SkeletonAlternateIsoRecord>? AlternateIsoRecords = null,
+    string? ManifestPath = null,
+    string? XaManifestPath = null)
 {
     public bool IsSpecial => SpecialKind != SkeletonSpecialKind.None;
     public bool IsEmpty =>
@@ -141,7 +143,8 @@ public sealed record NeroSystemAreaRecoveryProgress(
     long CandidatesTested,
     long TotalCandidates,
     TimeSpan Elapsed,
-    uint? PrivateValue = null)
+    uint? PrivateValue = null,
+    bool UsesWholeImageCrc32 = false)
 {
     public double Fraction => TotalCandidates <= 0
         ? 0
@@ -395,6 +398,8 @@ public sealed partial class SkeletonResurrectionService
         public long DataLength { get; set; }
         public string? Sha1 { get; set; }
         public string? XaSha1 { get; set; }
+        public string? ManifestPath { get; set; }
+        public string? XaManifestPath { get; set; }
         public SkeletonSpecialKind SpecialKind { get; }
         public bool CanRestore { get; }
         private readonly List<SkeletonAlternateIsoRecord> _alternateIsoRecords = new();
@@ -407,7 +412,9 @@ public sealed partial class SkeletonResurrectionService
 
         public SkeletonContentEntry ToEntry() => new(
             Path, ExtentLba, DataLength, Sha1, XaSha1, SpecialKind, CanRestore,
-            AlternateIsoRecords: _alternateIsoRecords.Count == 0 ? null : _alternateIsoRecords.ToArray());
+            AlternateIsoRecords: _alternateIsoRecords.Count == 0 ? null : _alternateIsoRecords.ToArray(),
+            ManifestPath: ManifestPath,
+            XaManifestPath: XaManifestPath);
     }
 
     private sealed class SkeletonImageReader : IAsyncDisposable

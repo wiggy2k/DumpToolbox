@@ -428,6 +428,149 @@ public sealed class NeroSystemAreaRecoveryTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RedumperResurrectionUsesWholeImageCrcAndManifestSystemAreaSha1(bool raw)
+    {
+        const int sectorCount = 40;
+        const uint expectedPrivateValue = 0x6719EA98;
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "DumpToolbox_NeroRedumperCrc_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectory);
+        string skeletonPath = Path.Combine(tempDirectory, "disc.skeleton");
+        string hashPath = Path.Combine(tempDirectory, "disc.hash");
+        string logPath = Path.Combine(tempDirectory, "disc.log");
+        string outputPath = Path.Combine(tempDirectory, raw ? "resurrected.bin" : "resurrected.iso");
+
+        try
+        {
+            var seed = new NeroSystemAreaRecoveryInfo(
+                "!!MS9F86.NRI",
+                243453,
+                1289,
+                "NeroISO0.02.03",
+                string.Empty);
+            byte[] expectedLogicalSystemArea = SkeletonResurrectionService.BuildNeroSystemAreaForPrivateValue(
+                seed,
+                expectedPrivateValue);
+            string expectedSystemAreaSha1 = Convert.ToHexString(
+                SHA1.HashData(expectedLogicalSystemArea)).ToLowerInvariant();
+            NeroSystemAreaRecoveryInfo info = seed with { ExpectedSystemAreaSha1 = expectedSystemAreaSha1 };
+
+            byte[] expectedImage = BuildDicTestImage(raw, sectorCount, expectedLogicalSystemArea);
+            byte[] skeletonImage = BuildDicTestImage(raw, sectorCount, new byte[16 * 2048]);
+            await File.WriteAllBytesAsync(skeletonPath, skeletonImage);
+            await File.WriteAllTextAsync(hashPath, $"{expectedSystemAreaSha1} SYSTEM_AREA{Environment.NewLine}");
+
+            string expectedCrc = Crc32.Compute(expectedImage).ToString("x8");
+            string expectedMd5 = Convert.ToHexString(MD5.HashData(expectedImage)).ToLowerInvariant();
+            string expectedSha1 = Convert.ToHexString(SHA1.HashData(expectedImage)).ToLowerInvariant();
+            await File.WriteAllTextAsync(
+                logPath,
+                $"dat:{Environment.NewLine}<rom name=\"disc.{(raw ? "bin" : "iso")}\" size=\"{expectedImage.LongLength}\" crc=\"{expectedCrc}\" md5=\"{expectedMd5}\" sha1=\"{expectedSha1}\" />{Environment.NewLine}");
+
+            var systemArea = new SkeletonContentEntry(
+                "SYSTEM_AREA",
+                0,
+                16 * 2048,
+                expectedSystemAreaSha1,
+                null,
+                SkeletonSpecialKind.SystemArea);
+            var inspection = new SkeletonInspectionResult(
+                skeletonPath,
+                hashPath,
+                raw ? SkeletonImageKind.Raw2352 : SkeletonImageKind.Cooked2048,
+                raw ? 2352 : 2048,
+                0,
+                sectorCount,
+                [systemArea],
+                "TEST",
+                1,
+                0)
+            {
+                NeroSystemAreaRecovery = info
+            };
+            var messages = new List<string>();
+            var recoveryProgress = new List<NeroSystemAreaRecoveryProgress>();
+
+            SkeletonResurrectionResult result = await new SkeletonResurrectionService().ResurrectAsync(
+                inspection,
+                new Dictionary<string, SkeletonSourceMatch>(),
+                outputPath,
+                allowMissing: false,
+                activity: new InlineProgress<string>(messages.Add),
+                neroSystemAreaProgress: new InlineProgress<NeroSystemAreaRecoveryProgress>(recoveryProgress.Add));
+
+            Assert.Equal(expectedImage, await File.ReadAllBytesAsync(outputPath));
+            Assert.Equal(1, result.RestoredEntries);
+            Assert.Contains(messages, message =>
+                message.Contains("CRC32 recovered private bytes 6719EA98", StringComparison.Ordinal));
+            Assert.Contains(recoveryProgress, item =>
+                item.UsesWholeImageCrc32 && item.PrivateValue == expectedPrivateValue);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RejectsRedumperCrcCandidateWhenManifestSystemAreaSha1DoesNotMatch(bool raw)
+    {
+        const int sectorCount = 40;
+        const uint crcPrivateValue = 0x6719EA98;
+        const uint manifestPrivateValue = 0x00000123;
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "DumpToolbox_NeroRedumperReject_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDirectory);
+        string imagePath = Path.Combine(tempDirectory, raw ? "disc.bin" : "disc.iso");
+
+        try
+        {
+            var seed = new NeroSystemAreaRecoveryInfo(
+                "!!MS9F86.NRI",
+                243453,
+                1289,
+                "NeroISO0.02.03",
+                string.Empty);
+            byte[] crcSystemArea = SkeletonResurrectionService.BuildNeroSystemAreaForPrivateValue(seed, crcPrivateValue);
+            byte[] manifestSystemArea = SkeletonResurrectionService.BuildNeroSystemAreaForPrivateValue(seed, manifestPrivateValue);
+            string manifestSha1 = Convert.ToHexString(SHA1.HashData(manifestSystemArea)).ToLowerInvariant();
+            NeroSystemAreaRecoveryInfo info = seed with { ExpectedSystemAreaSha1 = manifestSha1 };
+
+            byte[] targetImage = BuildDicTestImage(raw, sectorCount, crcSystemArea);
+            byte[] startingImage = BuildDicTestImage(raw, sectorCount, new byte[16 * 2048]);
+            File.WriteAllBytes(imagePath, startingImage);
+            var inspection = new SkeletonInspectionResult(
+                imagePath,
+                "disc.hash",
+                raw ? SkeletonImageKind.Raw2352 : SkeletonImageKind.Cooked2048,
+                raw ? 2352 : 2048,
+                0,
+                sectorCount,
+                Array.Empty<SkeletonContentEntry>(),
+                "TEST",
+                0,
+                0)
+            {
+                NeroSystemAreaRecovery = info
+            };
+
+            bool recovered = SkeletonResurrectionService.TryApplyRedumperNeroSystemArea(
+                inspection,
+                imagePath,
+                Crc32.Compute(targetImage));
+
+            Assert.False(recovered);
+            Assert.Equal(startingImage, File.ReadAllBytes(imagePath));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
     private static byte[] BuildDicTestImage(
         bool raw,
         int sectorCount,
@@ -463,6 +606,11 @@ public sealed class NeroSystemAreaRecoveryTests
         }
 
         return image;
+    }
+
+    private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
     }
 
     private static byte[] BuildTestNri()

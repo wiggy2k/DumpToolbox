@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
@@ -101,6 +102,40 @@ public partial class MainWindow : Window
             SkeletonOutputBox.Text = path;
     }
 
+    private async void SkeletonSaveFixReportButton_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_skeletonInspection is null || _skeletonCts is not null)
+            return;
+
+        try
+        {
+            string suggestedName =
+                $"{Path.GetFileNameWithoutExtension(_skeletonInspection.HashPath)}_fix_report.txt";
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Save SkeleTool fix report",
+                SuggestedFileName = suggestedName,
+                DefaultExtension = "txt",
+                FileTypeChoices =
+                [
+                    new FilePickerFileType("Text files") { Patterns = ["*.txt"] }
+                ]
+            });
+
+            if (file?.TryGetLocalPath() is not { } path)
+                return;
+
+            string report = SkeletoolFixReportService.Build(_skeletonInspection, _skeletonMatches);
+            await File.WriteAllTextAsync(path, report, new UTF8Encoding(false));
+            AppendSkeletonLog($"Fix report saved: {path}");
+        }
+        catch (Exception ex)
+        {
+            AppendSkeletonLog($"ERROR saving fix report: {ex.Message}");
+            await ShowMessageAsync("DumpToolbox — SkeleTool", ex.Message);
+        }
+    }
+
     private async void SkeletonLoadButton_Click(object? sender, RoutedEventArgs e)
     {
         if (_skeletonCts is not null)
@@ -114,7 +149,8 @@ public partial class MainWindow : Window
             SkeletonLogPanel.Children.Clear();
             _skeletonActivityLogText.Clear();
             UpdateSkeletonDetachedLog();
-            _skeletonTreeRoots.Clear();
+            _skeletonMatchedTreeRoots.Clear();
+            _skeletonOutstandingTreeRoots.Clear();
             _skeletonNodes.Clear();
             _skeletonMatches = new Dictionary<string, SkeletonSourceMatch>(StringComparer.OrdinalIgnoreCase);
             _skeletonInspection = null;
@@ -308,7 +344,7 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrWhiteSpace(p.MatchedEntryPath) &&
                     _skeletonNodes.TryGetValue(p.MatchedEntryPath, out SkeletonTreeNode? node))
                 {
-                    node.Status = p.MatchedAsXa ? "✓XA" : "✓";
+                    node.Status = p.MatchedAsXa ? "✓ XA MATCH" : "✓ MATCH";
                     node.SourcePath = p.MatchedSourcePath;
                 }
             });
@@ -334,12 +370,14 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
+            MarkSkeletonMissingStatuses();
             AppendSkeletonLog("Source hashing cancelled.");
             SkeletonProgressText.Text = "Cancelled";
             SetWindowStatus();
         }
         catch (Exception ex)
         {
+            MarkSkeletonMissingStatuses();
             AppendSkeletonLog($"ERROR: {ex.Message}");
             SkeletonProgressText.Text = "Error";
             SetWindowStatus();
@@ -581,17 +619,47 @@ public partial class MainWindow : Window
 
     private void BuildSkeletonTree(SkeletonInspectionResult inspection)
     {
-        _skeletonTreeRoots.Clear();
+        _skeletonMatchedTreeRoots.Clear();
+        _skeletonOutstandingTreeRoots.Clear();
         _skeletonNodes.Clear();
 
+        SkeletonContentEntry[] readyEntries = inspection.Entries
+            .Where(entry => IsSkeletonEntryReady(inspection, entry))
+            .ToArray();
+        SkeletonContentEntry[] outstandingEntries = inspection.Entries
+            .Where(entry => !IsSkeletonEntryReady(inspection, entry))
+            .ToArray();
+
+        BuildSkeletonTreeGroup(_skeletonMatchedTreeRoots, readyEntries, inspection);
+        BuildSkeletonTreeGroup(_skeletonOutstandingTreeRoots, outstandingEntries, inspection);
+
+        int matched = readyEntries.Count(entry => _skeletonMatches.ContainsKey(entry.Path));
+        int inherentlyReady = readyEntries.Length - matched;
+        int needed = outstandingEntries.Count(IsRequiredSkeletonSourceEntry);
+        int ignored = outstandingEntries.Count(entry => entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry);
+        int unknown = outstandingEntries.Length - needed - ignored;
+
+        SkeletonMatchedTreeHeading.Text = inherentlyReady > 0
+            ? $"Matched / ready — {matched:N0} matched, {inherentlyReady:N0} already satisfied"
+            : $"Matched / ready — {matched:N0}";
+        SkeletonOutstandingTreeHeading.Text = ignored > 0
+            ? $"Still needed / unknown — {needed:N0} needed, {unknown:N0} unknown, {ignored:N0} ignored"
+            : $"Still needed / unknown — {needed:N0} needed, {unknown:N0} unknown";
+    }
+
+    private void BuildSkeletonTreeGroup(
+        ObservableCollection<SkeletonTreeNode> roots,
+        IReadOnlyCollection<SkeletonContentEntry> entries,
+        SkeletonInspectionResult inspection)
+    {
         var rootFolders = new Dictionary<string, SkeletonTreeNode>(StringComparer.OrdinalIgnoreCase);
-        foreach (SkeletonContentEntry entry in inspection.Entries.Where(e => e.SpecialKind == SkeletonSpecialKind.None))
+        foreach (SkeletonContentEntry entry in entries.Where(e => e.SpecialKind == SkeletonSpecialKind.None))
         {
             string[] parts = entry.Path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length == 0)
                 continue;
 
-            ObservableCollection<SkeletonTreeNode> children = _skeletonTreeRoots;
+            ObservableCollection<SkeletonTreeNode> children = roots;
             string accumulated = string.Empty;
             for (int i = 0; i < parts.Length - 1; i++)
             {
@@ -606,7 +674,7 @@ public partial class MainWindow : Window
             }
 
             var fileNode = new SkeletonTreeNode(parts[^1], entry);
-            SetInitialSkeletonNodeStatus(fileNode, entry);
+            SetSkeletonNodeStatus(fileNode, entry, inspection);
             children.Add(fileNode);
             _skeletonNodes[entry.Path] = fileNode;
         }
@@ -614,32 +682,20 @@ public partial class MainWindow : Window
         // Keep directory branches together instead of interleaving them with root
         // files according to the full ISO path. Apply the same folders-first order
         // recursively within every directory.
-        SortSkeletonTreeNodes(_skeletonTreeRoots);
+        SortSkeletonTreeNodes(roots);
 
-        SkeletonContentEntry[] special = inspection.Entries.Where(e => e.SpecialKind != SkeletonSpecialKind.None).ToArray();
+        SkeletonContentEntry[] special = entries.Where(e => e.SpecialKind != SkeletonSpecialKind.None).ToArray();
         if (special.Length > 0)
         {
             var specialRoot = new SkeletonTreeNode("[Special / hash-only entries]");
             foreach (SkeletonContentEntry entry in special)
             {
                 var node = new SkeletonTreeNode(entry.Path, entry);
-                SetInitialSkeletonNodeStatus(node, entry);
-                if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                    SkeletonResurrectionService.CanRecoverNeroSystemArea(inspection))
-                {
-                    node.Status = "NRI";
-                    node.SourcePath = $"Will generate from {inspection.NeroSystemAreaRecovery!.ProjectFileName}";
-                }
-                else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                         SkeletonResurrectionService.CanRecoverKnownSystemArea(inspection))
-                {
-                    node.Status = "GEN";
-                    node.SourcePath = $"Will generate {inspection.KnownSystemAreaRecovery!.PatternName}";
-                }
+                SetSkeletonNodeStatus(node, entry, inspection);
                 specialRoot.Children.Add(node);
                 _skeletonNodes[entry.Path] = node;
             }
-            _skeletonTreeRoots.Add(specialRoot);
+            roots.Add(specialRoot);
         }
     }
 
@@ -658,22 +714,78 @@ public partial class MainWindow : Window
             nodes.Add(node);
     }
 
-    private static void SetInitialSkeletonNodeStatus(SkeletonTreeNode node, SkeletonContentEntry entry)
+    private bool IsSkeletonEntryReady(SkeletonInspectionResult inspection, SkeletonContentEntry entry)
+    {
+        if (entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry)
+            return false;
+        if (_skeletonMatches.ContainsKey(entry.Path))
+            return true;
+        if (!entry.CanRestore)
+            return false;
+        if (entry.IsEmpty)
+            return true;
+        return entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
+               (string.Equals(entry.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
+                SkeletonResurrectionService.CanGenerateSystemArea(inspection));
+    }
+
+    private static bool IsRequiredSkeletonSourceEntry(SkeletonContentEntry entry)
+    {
+        return entry.SpecialKind != SkeletonSpecialKind.UnmappedHashEntry &&
+               entry.CanRestore &&
+               !entry.IsEmpty &&
+               (!string.IsNullOrWhiteSpace(entry.Sha1) || !string.IsNullOrWhiteSpace(entry.XaSha1));
+    }
+
+    private void SetSkeletonNodeStatus(
+        SkeletonTreeNode node,
+        SkeletonContentEntry entry,
+        SkeletonInspectionResult inspection)
     {
         node.SourcePath = null;
+
         if (entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry)
-            node.Status = "Ignored";
+        {
+            node.Status = "IGNORED";
+        }
+        else if (_skeletonMatches.TryGetValue(entry.Path, out SkeletonSourceMatch? match))
+        {
+            node.Status = match.IsXa ? "✓ XA MATCH" : "✓ MATCH";
+            node.SourcePath = match.SourcePath;
+        }
         else if (!entry.CanRestore)
-            node.Status = "!";
+        {
+            node.Status = "? UNAVAILABLE";
+        }
         else if (entry.IsEmpty)
-            node.Status = "✓0";
+        {
+            node.Status = "✓ EMPTY";
+        }
         else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
                  string.Equals(entry.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase))
-            node.Status = "✓0";
+        {
+            node.Status = "✓ ZERO";
+        }
+        else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
+                 SkeletonResurrectionService.CanRecoverNeroSystemArea(inspection))
+        {
+            node.Status = "✓ GENERATE";
+            node.SourcePath = $"from {inspection.NeroSystemAreaRecovery!.ProjectFileName}";
+        }
+        else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
+                 SkeletonResurrectionService.CanRecoverKnownSystemArea(inspection))
+        {
+            node.Status = "✓ GENERATE";
+            node.SourcePath = inspection.KnownSystemAreaRecovery!.PatternName;
+        }
         else if (string.IsNullOrWhiteSpace(entry.Sha1) && string.IsNullOrWhiteSpace(entry.XaSha1))
-            node.Status = "?";
+        {
+            node.Status = "? NO HASH";
+        }
         else
-            node.Status = "○";
+        {
+            node.Status = "✗ STILL NEEDED";
+        }
     }
 
     private void MarkSkeletonMissingStatuses()
@@ -681,45 +793,7 @@ public partial class MainWindow : Window
         if (_skeletonInspection is null)
             return;
 
-        foreach (SkeletonContentEntry entry in _skeletonInspection.Entries)
-        {
-            if (!_skeletonNodes.TryGetValue(entry.Path, out SkeletonTreeNode? node))
-                continue;
-
-            if (entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry)
-            {
-                node.Status = "Ignored";
-                node.SourcePath = null;
-                continue;
-            }
-
-            if (_skeletonMatches.TryGetValue(entry.Path, out SkeletonSourceMatch? match))
-            {
-                node.Status = match.IsXa ? "✓XA" : "✓";
-                node.SourcePath = match.SourcePath;
-            }
-            else if (entry.CanRestore && !entry.IsEmpty &&
-                     !(entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                       (string.Equals(entry.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
-                        SkeletonResurrectionService.CanGenerateSystemArea(_skeletonInspection))) &&
-                     (!string.IsNullOrWhiteSpace(entry.Sha1) || !string.IsNullOrWhiteSpace(entry.XaSha1)))
-            {
-                node.Status = "✗";
-                node.SourcePath = null;
-            }
-            else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                     SkeletonResurrectionService.CanRecoverNeroSystemArea(_skeletonInspection))
-            {
-                node.Status = "NRI";
-                node.SourcePath = $"Will generate from {_skeletonInspection.NeroSystemAreaRecovery!.ProjectFileName}";
-            }
-            else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
-                     SkeletonResurrectionService.CanRecoverKnownSystemArea(_skeletonInspection))
-            {
-                node.Status = "GEN";
-                node.SourcePath = $"Will generate {_skeletonInspection.KnownSystemAreaRecovery!.PatternName}";
-            }
-        }
+        BuildSkeletonTree(_skeletonInspection);
     }
 
     private sealed class NeroRecoveryDialogState
@@ -752,7 +826,7 @@ public partial class MainWindow : Window
         };
         var details = new TextBlock
         {
-            Text = "This may take several minutes. DumpToolbox will use the available CPU cores while keeping one logical processor free for the interface.",
+            Text = "When a matching Redumper log supplies the whole-image CRC32, DumpToolbox will solve the value directly after rebuilding the other data. Otherwise it will use the available CPU cores for the SHA-1 search.",
             TextWrapping = Avalonia.Media.TextWrapping.Wrap
         };
         var cancel = new Button
@@ -782,7 +856,7 @@ public partial class MainWindow : Window
                     },
                     new TextBlock
                     {
-                        Text = "The skeleton identifies 28 bytes of Nero's 32-byte system-area record. The manifest SHA-1 is being used to recover the remaining four private bytes.",
+                        Text = "The skeleton identifies 28 bytes of Nero's 32-byte system-area record. A CRC32-derived value is accepted only when the generated 32 KiB SYSTEM_AREA matches the manifest SHA-1.",
                         TextWrapping = Avalonia.Media.TextWrapping.Wrap
                     },
                     progressBar,
@@ -818,10 +892,24 @@ public partial class MainWindow : Window
             return;
 
         state.ProgressBar.Value = progress.Fraction * 100;
+        if (progress.UsesWholeImageCrc32)
+        {
+            state.Status.Text = progress.PrivateValue is uint crcValue
+                ? $"Recovered private bytes {crcValue:X8}; SYSTEM_AREA SHA-1 matched."
+                : $"CRC32 solve — {progress.CandidatesTested:N0} of {progress.TotalCandidates:N0} influence vectors";
+            state.Details.Text = progress.PrivateValue is not null
+                ? $"Completed in {progress.Elapsed:g}. Resurrection will now continue."
+                : "Using the Redumper whole-image CRC32, including the raw sector's regenerated EDC/ECC bytes.";
+            SetWindowStatus($"Skeletool — solving Nero system area from CRC32 {progress.Fraction:P0}");
+            if (progress.PrivateValue is not null)
+                CloseNeroRecoveryDialog(state);
+            return;
+        }
+
         double rate = progress.CandidatesPerSecond;
         state.Status.Text = progress.PrivateValue is uint value
             ? $"Recovered private bytes {value:X8}; SHA-1 matched."
-            : $"{progress.Fraction:P1} — {progress.CandidatesTested:N0} of {progress.TotalCandidates:N0} candidates tested";
+            : $"SHA-1 fallback — {progress.Fraction:P1} — {progress.CandidatesTested:N0} of {progress.TotalCandidates:N0} candidates tested";
 
         if (progress.PrivateValue is not null)
         {
@@ -857,6 +945,7 @@ public partial class MainWindow : Window
         SkeletonSourceImageBrowseButton.IsEnabled = !running;
         SkeletonOutputBrowseButton.IsEnabled = !running;
         SkeletonLoadButton.IsEnabled = !running;
+        SkeletonSaveFixReportButton.IsEnabled = !running && _skeletonInspection is not null;
         SkeletonRecursiveCheckBox.IsEnabled = !running;
         SkeletonAllowMissingCheckBox.IsEnabled = !running;
         SkeletonForceRehashCheckBox.IsEnabled = !running;
@@ -881,6 +970,7 @@ public partial class MainWindow : Window
         SkeletonScanImageButton.IsEnabled = loaded;
         SkeletonCheckSha1DbButton.IsEnabled = loaded && IsSha1DatabaseEnabled;
         SkeletonResurrectButton.IsEnabled = loaded;
+        SkeletonSaveFixReportButton.IsEnabled = loaded;
     }
 
     private void AppendSkeletonLog(string message)

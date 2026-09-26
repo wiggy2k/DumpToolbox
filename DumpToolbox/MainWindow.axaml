@@ -402,13 +402,14 @@
         </Grid>
 
         <Grid Grid.Row="2" RowDefinitions="Auto,Auto" RowSpacing="6">
-          <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
+          <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
             <Button x:Name="SkeletonScanButton" Grid.Column="0" Content="Scan source folder" Click="SkeletonScanButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonScanImageButton" Grid.Column="1" Content="Scan source image" Click="SkeletonScanImageButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonCheckSha1DbButton" Grid.Column="2" Content="Check SHA-1 DB" Click="SkeletonCheckSha1DbButton_Click" IsEnabled="False"/>
             <Button x:Name="SkeletonResurrectButton" Grid.Column="3" Content="Resurrect" Click="SkeletonResurrectButton_Click" IsEnabled="False"/>
-            <Button x:Name="SkeletonCancelButton" Grid.Column="4" Content="Cancel" Click="SkeletonCancelButton_Click" IsEnabled="False"/>
-            <Button x:Name="SkeletonClearSavedInputsButton" Grid.Column="6" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
+            <Button x:Name="SkeletonSaveFixReportButton" Grid.Column="4" Content="Save fix report" Click="SkeletonSaveFixReportButton_Click" IsEnabled="False"/>
+            <Button x:Name="SkeletonCancelButton" Grid.Column="5" Content="Cancel" Click="SkeletonCancelButton_Click" IsEnabled="False"/>
+            <Button x:Name="SkeletonClearSavedInputsButton" Grid.Column="7" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
           </Grid>
           <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
             <ProgressBar x:Name="SkeletonProgressBar" Grid.Column="0" Minimum="0" Maximum="100" Height="18" VerticalAlignment="Center"/>
@@ -420,27 +421,48 @@
 
         <Grid Grid.Row="4" RowDefinitions="Auto,*" RowSpacing="5">
           <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-            <TextBlock Grid.Column="0" Text="ISO contents / match status" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Grid.Column="0" Text="ISO contents" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             <TextBlock Grid.Column="1" Text="Activity log" FontWeight="SemiBold" VerticalAlignment="Center"/>
             <Button x:Name="SkeletonActivityLogButton" Grid.Column="2" Click="SkeletonActivityLogButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M12,5 C6.5,5 2.1,10 1,12 C2.1,14 6.5,19 12,19 C17.5,19 21.9,14 23,12 C21.9,10 17.5,5 12,5 Z M12,8 C14.2,8 16,9.8 16,12 C16,14.2 14.2,16 12,16 C9.8,16 8,14.2 8,12 C8,9.8 9.8,8 12,8 Z"/><TextBlock x:Name="SkeletonActivityLogButtonText" Text="Hide"/></StackPanel></Button>
             <Button x:Name="SkeletonLogDockButton" Grid.Column="3" Click="SkeletonLogDockButton_Click" Padding="8,4"><StackPanel Orientation="Horizontal" Spacing="5"><PathIcon Width="16" Height="16" Data="M14,3 H21 V10 H19 V6.4 L11.7,13.7 L10.3,12.3 L17.6,5 H14 Z M5,5 H11 V7 H5 V19 H17 V13 H19 V19 C19,20.1 18.1,21 17,21 H5 C3.9,21 3,20.1 3,19 V7 C3,5.9 3.9,5 5,5 Z"/><TextBlock x:Name="SkeletonLogDockButtonText" Text="Undock"/></StackPanel></Button>
           </Grid>
 
           <Grid x:Name="SkeletonWorkspaceGrid" Grid.Row="1" ColumnDefinitions="*,6,*">
-            <Border Grid.Column="0" BorderThickness="1" BorderBrush="#666666" Padding="4" Margin="0,0,5,0">
-                <TreeView x:Name="SkeletonTree" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto">
-                  <TreeView.ItemTemplate>
-                    <TreeDataTemplate ItemsSource="{Binding Children}">
-                      <StackPanel Orientation="Horizontal">
-                        <PathIcon Width="17" Height="17" Margin="0,0,6,0" VerticalAlignment="Center" IsVisible="{Binding IsFolder}" Foreground="#F4C542" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/>
-                        <TextBlock Text="{Binding Status}" Foreground="{Binding StatusForeground}" FontFamily="monospace"/>
-                        <TextBlock Text=" " FontFamily="monospace" IsVisible="{Binding !IsFolder}"/>
-                        <TextBlock Text="{Binding DetailsText}" FontFamily="monospace"/>
-                      </StackPanel>
-                    </TreeDataTemplate>
-                  </TreeView.ItemTemplate>
-                </TreeView>
-            </Border>
+            <Grid Grid.Column="0" RowDefinitions="Auto,*,6,Auto,*" Margin="0,0,5,0">
+              <TextBlock x:Name="SkeletonMatchedTreeHeading" Grid.Row="0" Text="Matched / ready — 0" FontWeight="SemiBold" Foreground="LimeGreen" Margin="2,0,0,4"/>
+              <Border Grid.Row="1" BorderThickness="1" BorderBrush="#4F8A4F" Padding="4" CornerRadius="3">
+                  <TreeView x:Name="SkeletonMatchedTree" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <TreeView.ItemTemplate>
+                      <TreeDataTemplate ItemsSource="{Binding Children}">
+                        <StackPanel Orientation="Horizontal">
+                          <PathIcon Width="17" Height="17" Margin="0,0,6,0" VerticalAlignment="Center" IsVisible="{Binding IsFolder}" Foreground="#F4C542" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/>
+                          <TextBlock Text="{Binding Status}" Foreground="{Binding StatusForeground}" FontFamily="monospace"/>
+                          <TextBlock Text=" " FontFamily="monospace" IsVisible="{Binding !IsFolder}"/>
+                          <TextBlock Text="{Binding DetailsText}" FontFamily="monospace"/>
+                        </StackPanel>
+                      </TreeDataTemplate>
+                    </TreeView.ItemTemplate>
+                  </TreeView>
+              </Border>
+
+              <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch" ResizeDirection="Rows"/>
+
+              <TextBlock x:Name="SkeletonOutstandingTreeHeading" Grid.Row="3" Text="Still needed / unknown — 0 needed, 0 unknown" FontWeight="SemiBold" Foreground="OrangeRed" Margin="2,4,0,4"/>
+              <Border Grid.Row="4" BorderThickness="1" BorderBrush="#A75B4A" Padding="4" CornerRadius="3">
+                  <TreeView x:Name="SkeletonOutstandingTree" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <TreeView.ItemTemplate>
+                      <TreeDataTemplate ItemsSource="{Binding Children}">
+                        <StackPanel Orientation="Horizontal">
+                          <PathIcon Width="17" Height="17" Margin="0,0,6,0" VerticalAlignment="Center" IsVisible="{Binding IsFolder}" Foreground="#F4C542" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/>
+                          <TextBlock Text="{Binding Status}" Foreground="{Binding StatusForeground}" FontFamily="monospace"/>
+                          <TextBlock Text=" " FontFamily="monospace" IsVisible="{Binding !IsFolder}"/>
+                          <TextBlock Text="{Binding DetailsText}" FontFamily="monospace"/>
+                        </StackPanel>
+                      </TreeDataTemplate>
+                    </TreeView.ItemTemplate>
+                  </TreeView>
+              </Border>
+            </Grid>
 
             <GridSplitter x:Name="SkeletonLogSplitter" Grid.Column="1" Width="6" HorizontalAlignment="Stretch"/>
 
