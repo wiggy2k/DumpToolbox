@@ -436,30 +436,20 @@ public sealed partial class SkeletonResurrectionService
             foreach (IsoFileExtent file in scanFiles)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                byte[] payload;
+                string sha1;
                 try
                 {
-                    if (file.LogicalLength > int.MaxValue)
-                        throw new InvalidOperationException("Logical ISO/BIN source file is larger than the in-memory hash limit.");
-                    payload = new byte[checked((int)file.LogicalLength)];
-                    int writeOffset = 0;
-                    foreach (SkeletonSourceImageExtent extent in file.LogicalExtents)
-                    {
-                        if (extent.Length > int.MaxValue)
-                            throw new InvalidOperationException("Logical ISO/BIN source extent is larger than the in-memory hash limit.");
-                        byte[] part = await reader.ReadForm1BytesAsync(checked((uint)extent.Lba), checked((uint)extent.Length), cancellationToken).ConfigureAwait(false);
-                        Buffer.BlockCopy(part, 0, payload, writeOffset, part.Length);
-                        writeOffset += part.Length;
-                    }
+                    sha1 = await reader.CalculateForm1ExtentsSha1Async(
+                        file.LogicalExtents,
+                        cancellationToken).ConfigureAwait(false);
                 }
-                catch (InvalidOperationException)
+                catch (Exception ex) when (ex is InvalidOperationException or EndOfStreamException or OverflowException)
                 {
                     processedBytes += file.LogicalLength; processed++;
                     progress?.Report(new SkeletonSourceScanProgress(processed, totalItems, processedBytes, totalBytes, file.Path, FilesSkipped: 1));
                     continue;
                 }
 
-                string sha1 = Convert.ToHexString(SHA1.HashData(payload)).ToLowerInvariant();
                 NeroProjectEntry? neroProject = tree.NeroProjects.FirstOrDefault(candidate =>
                     candidate.Lba == file.Lba &&
                     candidate.DataLength == file.LogicalLength &&

@@ -11,6 +11,10 @@
 - SkeleTool now separates matched/ready entries from still-needed/unknown entries in two independently scrollable trees. Each view preserves the ISO directory hierarchy, shows descriptive colour-coded statuses and summary counts, and is rebuilt after source or catalogue matching.
 - SkeleTool now solves Nero's four private `SYSTEM_AREA` bytes directly from a matching Redumper whole-image CRC32 after restoring the other payloads, including each candidate's raw-sector EDC/ECC effects. The derived value is accepted only when the generated 32 KiB `SYSTEM_AREA` matches the manifest SHA-1; the vectorized SHA-1 search remains available as an automatic fallback.
 
+### Fixed
+
+- SkeleTool now hashes source ISO/BIN file extents incrementally and exposes matched image extents through a seekable stream during resurrection. Direct image matching and restoration therefore support files larger than 2 GiB without allocating the complete file in memory.
+
 ## 0.8.109 — 2026-09-20
 
 ### Added

@@ -953,74 +953,11 @@ public sealed partial class SkeletonResurrectionService
 
         long length = match.SourceLength
             ?? throw new InvalidOperationException("Image-backed Skeletool source is missing its byte length.");
-        if (length > int.MaxValue)
-            throw new InvalidOperationException("Direct ISO/BIN source entries larger than 2 GiB are not yet supported without streaming image extents.");
 
         IReadOnlyList<SkeletonSourceImageExtent> extents = match.SourceImageExtents is { Count: > 0 }
             ? match.SourceImageExtents
             : new[] { new SkeletonSourceImageExtent(match.SourceImageLba.Value, length) };
-
-        using var image = OpenRead(match.SourcePath, CopyBufferSize, FileOptions.RandomAccess);
-        long imageLength = image.Length;
-        bool raw = imageLength % RawSectorSize == 0;
-        if (raw)
-        {
-            Span<byte> sync = stackalloc byte[SyncPattern.Length];
-            image.Position = 0;
-            int got = image.Read(sync);
-            raw = got == sync.Length && sync.SequenceEqual(SyncPattern);
-        }
-
-        byte[] payload = new byte[checked((int)length)];
-        int written = 0;
-        foreach (SkeletonSourceImageExtent extent in extents)
-        {
-            long extentRemaining = extent.Length;
-            long lba = extent.Lba;
-            if (!raw)
-            {
-                image.Position = checked(lba * CookedSectorSize);
-                while (extentRemaining > 0)
-                {
-                    int want = (int)Math.Min((long)(payload.Length - written), extentRemaining);
-                    int n = image.Read(payload, written, want);
-                    if (n <= 0) throw new EndOfStreamException($"Unexpected end of source image: {match.SourcePath}");
-                    written += n;
-                    extentRemaining -= n;
-                }
-            }
-            else
-            {
-                byte[] sector = new byte[RawSectorSize];
-                while (extentRemaining > 0)
-                {
-                    image.Position = checked(lba * RawSectorSize);
-                    int read = 0;
-                    while (read < sector.Length)
-                    {
-                        int n = image.Read(sector, read, sector.Length - read);
-                        if (n <= 0) throw new EndOfStreamException($"Unexpected end of source image: {match.SourcePath}");
-                        read += n;
-                    }
-                    int userOffset = sector[15] switch
-                    {
-                        1 => 16,
-                        2 when (sector[18] & XaForm2Bit) == 0 => 24,
-                        _ => throw new InvalidOperationException($"Source image file extent at LBA {lba:N0} is not Mode 1 / Mode 2 Form 1.")
-                    };
-                    int copy = (int)Math.Min(CookedSectorSize, extentRemaining);
-                    Buffer.BlockCopy(sector, userOffset, payload, written, copy);
-                    written += copy;
-                    extentRemaining -= copy;
-                    lba++;
-                }
-            }
-        }
-
-        if (written != payload.Length)
-            throw new InvalidOperationException($"Logical image-backed source '{match.SourceRelativePath ?? match.Entry.Path}' produced {written:N0} byte(s), expected {payload.Length:N0}.");
-
-        return new MemoryStream(payload, writable: false);
+        return new OpticalImageExtentStream(match.SourcePath, extents, length);
     }
 
     private static int ResurrectCookedSequential(

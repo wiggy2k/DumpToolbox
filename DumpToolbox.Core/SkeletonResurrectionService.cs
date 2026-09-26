@@ -519,6 +519,79 @@ public sealed partial class SkeletonResurrectionService
             return result;
         }
 
+        public async Task<string> CalculateForm1ExtentsSha1Async(
+            IReadOnlyList<SkeletonSourceImageExtent> extents,
+            CancellationToken cancellationToken)
+        {
+            if (extents.Count == 0)
+                throw new InvalidOperationException("At least one source-image extent is required.");
+
+            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+            if (Kind == SkeletonImageKind.Cooked2048)
+            {
+                byte[] buffer = new byte[HashBufferSize];
+                foreach (SkeletonSourceImageExtent extent in extents)
+                {
+                    long sectorIndex = extent.Lba - BaseLba;
+                    if (extent.Length < 0 || sectorIndex < 0 ||
+                        sectorIndex >= SectorCount ||
+                        DivideRoundUp(extent.Length, CookedSectorSize) > SectorCount - sectorIndex)
+                    {
+                        throw new InvalidOperationException($"Source-image extent at LBA {extent.Lba:N0} is outside the image.");
+                    }
+
+                    _stream.Position = checked(sectorIndex * CookedSectorSize);
+                    long remaining = extent.Length;
+                    while (remaining > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        int count = checked((int)Math.Min((long)buffer.Length, remaining));
+                        await ReadExactlyAsync(_stream, buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
+                        hash.AppendData(buffer, 0, count);
+                        remaining -= count;
+                    }
+                }
+            }
+            else
+            {
+                byte[] raw = new byte[RawSectorSize];
+                foreach (SkeletonSourceImageExtent extent in extents)
+                {
+                    long sectorIndex = extent.Lba - BaseLba;
+                    if (extent.Length < 0 || sectorIndex < 0 ||
+                        sectorIndex >= SectorCount ||
+                        DivideRoundUp(extent.Length, CookedSectorSize) > SectorCount - sectorIndex)
+                    {
+                        throw new InvalidOperationException($"Source-image extent at LBA {extent.Lba:N0} is outside the image.");
+                    }
+
+                    long remaining = extent.Length;
+                    while (remaining > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        _stream.Position = checked(sectorIndex * RawSectorSize);
+                        await ReadExactlyAsync(_stream, raw, cancellationToken).ConfigureAwait(false);
+                        long currentLba = BaseLba + sectorIndex;
+                        if (!raw.AsSpan(0, SyncPattern.Length).SequenceEqual(SyncPattern))
+                            throw new InvalidOperationException($"Invalid raw sector sync at LBA {currentLba:N0}.");
+
+                        int userOffset = raw[15] switch
+                        {
+                            1 => 16,
+                            2 when (raw[18] & XaForm2Bit) == 0 => 24,
+                            _ => throw new InvalidOperationException($"Source-image extent at LBA {currentLba:N0} is not Mode 1 / Mode 2 Form 1.")
+                        };
+                        int count = checked((int)Math.Min((long)CookedSectorSize, remaining));
+                        hash.AppendData(raw, userOffset, count);
+                        remaining -= count;
+                        sectorIndex++;
+                    }
+                }
+            }
+
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+
         public ValueTask DisposeAsync() => _stream.DisposeAsync();
     }
 }
