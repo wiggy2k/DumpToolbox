@@ -64,7 +64,11 @@ public sealed record DicJolietNameUpdateResult(
     int DicLongAliasesUsed,
     int SourcePathsUsed,
     string Strategy,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    public JolietRecordOrdering? RecordOrdering { get; init; }
+    public JolietPathTableOrdering? PathTableOrdering { get; init; }
+}
 
 /// <summary>
 /// Imports the text logs produced by DiscImageCreator and turns them into a synthetic

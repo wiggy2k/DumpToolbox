@@ -166,10 +166,17 @@ public sealed partial class DicLogImportService
         DicVolumeInfo volume,
         Dictionary<long, byte[]> metadata,
         List<string> warnings,
+        out JolietRecordOrdering selectedRecordOrdering,
+        out JolietPathTableOrdering selectedPathTableOrdering,
         string filenameSourceDescription = "the best filenames available in volDesc",
         IReadOnlyDictionary<string, PrimaryDirectoryMetadata>? directoryMetadata = null,
-        CeQuadratLinkTableContext? ceQuadratLinkTable = null)
+        CeQuadratLinkTableContext? ceQuadratLinkTable = null,
+        JolietRecordOrdering? recordOrderingOverride = null,
+        JolietPathTableOrdering? pathTableOrderingOverride = null)
     {
+        selectedRecordOrdering = recordOrderingOverride ?? JolietRecordOrdering.PreservePrimaryRecordOrder;
+        selectedPathTableOrdering = pathTableOrderingOverride ?? JolietPathTableOrdering.PreservePrimaryDirectoryOrder;
+
         KeyValuePair<long, byte[]>? svdPair = metadata
             .Where(pair => IsJolietSupplementaryDescriptor(pair.Value))
             .Select(pair => (KeyValuePair<long, byte[]>?)pair)
@@ -258,17 +265,12 @@ public sealed partial class DicLogImportService
             warnings.Add($"JOLIET: JolietNamingRules.ini warning: {warning}");
         JolietNamingProfile? namingProfile = JolietNamingRuleService.FindMatch(namingRuleSet, masteringIdentity);
 
-        JolietRecordOrdering selectedRecordOrdering =
+        selectedRecordOrdering = recordOrderingOverride ??
             namingProfile?.RecordOrdering ?? masteringProfile.JolietRecordOrdering;
-        JolietPathTableOrdering selectedPathTableOrdering =
+        selectedPathTableOrdering = pathTableOrderingOverride ??
             namingProfile?.PathTableOrdering ?? masteringProfile.JolietPathTableOrdering;
-        IComparer<string>? jolietRecordIdentifierComparer = selectedRecordOrdering switch
-        {
-            JolietRecordOrdering.CaseSensitiveUcs2Identifier => StringComparer.Ordinal,
-            JolietRecordOrdering.CaseInsensitiveUcs2Identifier => StringComparer.OrdinalIgnoreCase,
-            JolietRecordOrdering.AccentFoldedCaseSensitiveIdentifier => JolietNameComparers.AccentFoldedCaseSensitive,
-            _ => null
-        };
+        IComparer<string>? jolietRecordIdentifierComparer =
+            JolietOrderingCandidates.GetIdentifierComparer(selectedRecordOrdering);
         IComparer<string>? jolietPathTableIdentifierComparer = selectedPathTableOrdering switch
         {
             JolietPathTableOrdering.CaseSensitiveUcs2Identifier => StringComparer.Ordinal,
@@ -287,6 +289,12 @@ public sealed partial class DicLogImportService
             warnings.Add(
                 $"JOLIET: External mastering profile '{namingProfile.Name}' selected: " +
                 $"file versioning={namingProfile.FileVersioning}, records={selectedRecordOrdering}, path table={selectedPathTableOrdering}.");
+        }
+        if (recordOrderingOverride is not null || pathTableOrderingOverride is not null)
+        {
+            warnings.Add(
+                $"JOLIET: Candidate override selected records={selectedRecordOrdering}, path table={selectedPathTableOrdering}; " +
+                "the candidate remains temporary unless every available original whole-image hash matches.");
         }
 
         // v0.1.18: supplementary/Joliet directory records normally need fresh minimal
@@ -528,9 +536,13 @@ public sealed partial class DicLogImportService
             hasCompletePrimaryExtentMapping;
 
         if (hasPairedPrimaryOrderingEvidence &&
+            recordOrderingOverride is null &&
+            pathTableOrderingOverride is null &&
             selectedRecordOrdering == JolietRecordOrdering.CaseSensitiveUcs2Identifier &&
             selectedPathTableOrdering == JolietPathTableOrdering.CaseSensitiveUcs2Identifier)
         {
+            selectedRecordOrdering = JolietRecordOrdering.PreservePrimaryRecordOrder;
+            selectedPathTableOrdering = JolietPathTableOrdering.PreservePrimaryDirectoryOrder;
             jolietRecordIdentifierComparer = null;
             jolietPathTableIdentifierComparer = null;
             directories = FlattenJolietDirectories(root);

@@ -152,6 +152,14 @@ public partial class MainWindow
                 }
             }
 
+            rebuiltHashesMatch = await TryTestDicJolietOrderingCandidatesAsync(
+                inspection,
+                result,
+                jolietUpdate,
+                DicForceMatchedJolietNamesCheckBox.IsChecked == true,
+                rebuiltHashesMatch,
+                _dicCts.Token);
+
             rebuiltHashesMatch = await TryTestDicCeQuadratFooterCandidatesAsync(
                 inspection,
                 result,

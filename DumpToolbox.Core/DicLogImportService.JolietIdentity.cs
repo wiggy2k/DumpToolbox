@@ -13,7 +13,9 @@ public sealed partial class DicLogImportService
         IReadOnlyDictionary<string, SkeletonSourceMatch> matches,
         string sourceDirectory,
         bool forceMatchedJolietNames = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        JolietRecordOrdering? recordOrderingOverride = null,
+        JolietPathTableOrdering? pathTableOrderingOverride = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.Run(
@@ -22,8 +24,113 @@ public sealed partial class DicLogImportService
                 matches,
                 sourceDirectory,
                 forceMatchedJolietNames,
+                recordOrderingOverride,
+                pathTableOrderingOverride,
                 cancellationToken),
             cancellationToken);
+    }
+
+    public async Task<DicJolietNameUpdateResult> CreateMatchedJolietOrderingCandidateAsync(
+        SkeletonInspectionResult inspection,
+        IReadOnlyDictionary<string, SkeletonSourceMatch> matches,
+        string sourceDirectory,
+        bool forceMatchedJolietNames,
+        string rebuiltImagePath,
+        string candidatePath,
+        JolietRecordOrdering recordOrdering,
+        JolietPathTableOrdering pathTableOrdering,
+        IProgress<DicDonorProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(inspection);
+        ArgumentNullException.ThrowIfNull(matches);
+
+        string sourcePath = Path.GetFullPath(rebuiltImagePath);
+        string destinationPath = Path.GetFullPath(candidatePath);
+        if (!File.Exists(sourcePath))
+            throw new FileNotFoundException("The rebuilt image was not found.", sourcePath);
+        if (sourcePath.Equals(destinationPath, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The Joliet-ordering candidate must use a separate path.", nameof(candidatePath));
+
+        try
+        {
+            await CopyJolietOrderingCandidateAsync(
+                sourcePath,
+                destinationPath,
+                progress,
+                cancellationToken).ConfigureAwait(false);
+
+            SkeletonInspectionResult candidateInspection = inspection with
+            {
+                SkeletonPath = destinationPath
+            };
+            DicJolietNameUpdateResult update = await ApplyMatchedJolietNamesAsync(
+                candidateInspection,
+                matches,
+                sourceDirectory,
+                forceMatchedJolietNames,
+                cancellationToken,
+                recordOrdering,
+                pathTableOrdering).ConfigureAwait(false);
+
+            if (!update.Updated)
+                TryDeleteJolietOrderingCandidate(destinationPath);
+            return update;
+        }
+        catch
+        {
+            TryDeleteJolietOrderingCandidate(destinationPath);
+            throw;
+        }
+    }
+
+    private static async Task CopyJolietOrderingCandidateAsync(
+        string sourcePath,
+        string destinationPath,
+        IProgress<DicDonorProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        const int bufferSize = 4 * 1024 * 1024;
+        long total = new FileInfo(sourcePath).Length;
+        long copied = 0;
+        byte[] buffer = new byte[bufferSize];
+
+        await using var source = new FileStream(
+            sourcePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using var destination = new FileStream(
+            destinationPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        int read;
+        while ((read = await source.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            copied += read;
+            progress?.Report(new DicDonorProgress(copied, total, "Creating temporary Joliet-ordering candidate"));
+        }
+        await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void TryDeleteJolietOrderingCandidate(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // Candidate cleanup must not hide the rebuild or verification result.
+        }
     }
 
 
@@ -32,6 +139,8 @@ public sealed partial class DicLogImportService
         IReadOnlyDictionary<string, SkeletonSourceMatch> matches,
         string sourceDirectory,
         bool forceMatchedJolietNames,
+        JolietRecordOrdering? recordOrderingOverride,
+        JolietPathTableOrdering? pathTableOrderingOverride,
         CancellationToken cancellationToken)
     {
         var warnings = new List<string>();
@@ -289,6 +398,7 @@ public sealed partial class DicLogImportService
         }
 
         long volumeSpaceSize = inspection.SectorCount;
+        HashSet<long> existingJolietMetadata = DiscoverJolietMetadataLbas(inspection, cancellationToken);
         var metadata = new Dictionary<long, byte[]> { [svdLba] = (byte[])svdPayload!.Clone() };
         var attemptWarnings = new List<string>();
         DateTimeOffset defaultRecordingTime = TryReadIsoDirectoryTimestamp(svdPayload!.AsSpan(174, 7), out DateTimeOffset rootTime)
@@ -324,7 +434,17 @@ public sealed partial class DicLogImportService
             ? "validated matched Joliet source paths, with DIC primary ISO9660 extents/sizes/timestamps/flags and fresh supplementary records"
             : "DIC-supplied long-name aliases";
         CeQuadratLinkTableContext? ceQuadratLinkTable = TryReadCeQuadratLinkTableContext(inspection, cancellationToken);
-        if (!TrySynthesizeJolietMetadata(volume, metadata, attemptWarnings, description, directoryMetadata, ceQuadratLinkTable))
+        if (!TrySynthesizeJolietMetadata(
+                volume,
+                metadata,
+                attemptWarnings,
+                out JolietRecordOrdering selectedRecordOrdering,
+                out JolietPathTableOrdering selectedPathTableOrdering,
+                description,
+                directoryMetadata,
+                ceQuadratLinkTable,
+                recordOrderingOverride,
+                pathTableOrderingOverride))
         {
             warnings.AddRange(attemptWarnings);
             warnings.Add("The reconstructed Joliet names would not fit safely in the original supplementary metadata area, so it was left unchanged.");
@@ -410,6 +530,28 @@ public sealed partial class DicLogImportService
         }
 
         Dictionary<long, byte[]> primarySnapshot = SnapshotRawSectors(inspection, primaryIsoMetadata, cancellationToken);
+
+        // A different record ordering can change directory-sector packing and, in
+        // turn, the set of supplementary sectors used by the generated tree. The
+        // candidate starts as a copy of the default rebuild, so explicitly clear any
+        // old generated Joliet metadata sector which the alternative layout no longer
+        // uses. Otherwise stale default-order records could survive outside the new
+        // tree and make an otherwise correct candidate fail its whole-image hashes.
+        long[] staleJolietMetadata = existingJolietMetadata
+            .Where(lba => !metadata.ContainsKey(lba))
+            .Where(lba => !primaryIsoMetadata.Contains(lba))
+            .Where(lba => !exactMainInfo.Contains(lba))
+            .Where(lba => inspection.DicExactRawSectorOverrides?.ContainsKey(lba) != true)
+            .OrderBy(lba => lba)
+            .ToArray();
+        foreach (long lba in staleJolietMetadata)
+            metadata[lba] = new byte[CookedSectorSize];
+        if (staleJolietMetadata.Length > 0)
+        {
+            warnings.Add(
+                $"JOLIET: Cleared {staleJolietMetadata.Length:N0} stale supplementary metadata sector(s) left by the prior generated layout before installing this candidate.");
+        }
+
         PatchRawMetadataSectors(inspection, metadata, cancellationToken);
         RestoreRawSectors(inspection, primarySnapshot, cancellationToken);
 
@@ -431,7 +573,11 @@ public sealed partial class DicLogImportService
             dicAliasesUsed,
             sourcePathsUsed,
             "validated Joliet source paths -> DIC primary ISO records",
-            warnings);
+            warnings)
+        {
+            RecordOrdering = selectedRecordOrdering,
+            PathTableOrdering = selectedPathTableOrdering
+        };
     }
 
     private static bool SourcePathIsInsideDirectory(string sourcePath, string sourceDirectory)
@@ -1490,6 +1636,126 @@ public sealed partial class DicLogImportService
         }
 
         return protectedLbas;
+    }
+
+    private static HashSet<long> DiscoverJolietMetadataLbas(
+        SkeletonInspectionResult inspection,
+        CancellationToken cancellationToken)
+    {
+        var metadataLbas = new HashSet<long>();
+        byte[] sector = new byte[RawSectorSize];
+        byte[] payload = new byte[CookedSectorSize];
+        byte[]? svd = null;
+
+        using var stream = new FileStream(
+            inspection.SkeletonPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            1024 * 1024,
+            FileOptions.RandomAccess);
+
+        long scanEnd = Math.Min(inspection.SectorCount, 64);
+        for (long sectorIndex = 0; sectorIndex < scanEnd; sectorIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            long lba = inspection.BaseLba + sectorIndex;
+            if (!TryReadLogical2048(stream, inspection, lba, sector, payload, cancellationToken))
+                continue;
+            if (!IsJolietSupplementaryDescriptor(payload))
+                continue;
+
+            svd = (byte[])payload.Clone();
+            metadataLbas.Add(lba);
+            break;
+        }
+
+        if (svd is null)
+            return metadataLbas;
+
+        uint pathTableSize = BinaryPrimitives.ReadUInt32LittleEndian(svd.AsSpan(132, 4));
+        long pathTableSectors = DivideRoundUp(pathTableSize, CookedSectorSize);
+        foreach (uint start in new[]
+                 {
+                     BinaryPrimitives.ReadUInt32LittleEndian(svd.AsSpan(140, 4)),
+                     BinaryPrimitives.ReadUInt32LittleEndian(svd.AsSpan(144, 4)),
+                     BinaryPrimitives.ReadUInt32BigEndian(svd.AsSpan(148, 4)),
+                     BinaryPrimitives.ReadUInt32BigEndian(svd.AsSpan(152, 4))
+                 })
+        {
+            if (start == 0)
+                continue;
+            for (long i = 0; i < pathTableSectors; i++)
+                metadataLbas.Add(start + i);
+        }
+
+        uint rootLba = BinaryPrimitives.ReadUInt32LittleEndian(svd.AsSpan(158, 4));
+        uint rootLength = BinaryPrimitives.ReadUInt32LittleEndian(svd.AsSpan(166, 4));
+        var queue = new Queue<(long Lba, long Length)>();
+        var seenDirectories = new HashSet<long>();
+        if (rootLba > 0 && rootLength > 0)
+            queue.Enqueue((rootLba, rootLength));
+
+        while (queue.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (long directoryLba, long directoryLength) = queue.Dequeue();
+            if (!seenDirectories.Add(directoryLba))
+                continue;
+
+            long directorySectors = Math.Max(1, DivideRoundUp(directoryLength, CookedSectorSize));
+            byte[] directoryBytes = new byte[checked((int)(directorySectors * CookedSectorSize))];
+            bool complete = true;
+            for (long i = 0; i < directorySectors; i++)
+            {
+                long lba = directoryLba + i;
+                metadataLbas.Add(lba);
+                if (!TryReadLogical2048(stream, inspection, lba, sector, payload, cancellationToken))
+                {
+                    complete = false;
+                    break;
+                }
+                Buffer.BlockCopy(payload, 0, directoryBytes, checked((int)(i * CookedSectorSize)), CookedSectorSize);
+            }
+            if (!complete)
+                continue;
+
+            int limit = checked((int)Math.Min((long)directoryBytes.Length, directoryLength));
+            int position = 0;
+            while (position < limit)
+            {
+                int withinSector = position % CookedSectorSize;
+                int recordLength = directoryBytes[position];
+                if (recordLength == 0)
+                {
+                    position += CookedSectorSize - withinSector;
+                    continue;
+                }
+                if (recordLength < 34 || position + recordLength > limit)
+                    break;
+
+                ReadOnlySpan<byte> record = directoryBytes.AsSpan(position, recordLength);
+                int identifierLength = record[32];
+                if ((record[25] & (byte)IsoDirectoryRecordFlags.Directory) != 0 &&
+                    identifierLength > 0 &&
+                    33 + identifierLength <= recordLength)
+                {
+                    ReadOnlySpan<byte> identifier = record.Slice(33, identifierLength);
+                    bool specialEntry = identifierLength == 1 && (identifier[0] == 0 || identifier[0] == 1);
+                    if (!specialEntry)
+                    {
+                        uint childLba = BinaryPrimitives.ReadUInt32LittleEndian(record.Slice(2, 4));
+                        uint childLength = BinaryPrimitives.ReadUInt32LittleEndian(record.Slice(10, 4));
+                        if (childLba > 0 && childLength > 0 && !seenDirectories.Contains(childLba))
+                            queue.Enqueue((childLba, childLength));
+                    }
+                }
+
+                position += recordLength;
+            }
+        }
+
+        return metadataLbas;
     }
 
     private static bool TryReadLogical2048(

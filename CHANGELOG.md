@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.111 — 2026-09-27
+
+### Added
+
+- After a complete DIC rebuild misses its original whole-image hashes, Joliet recovery now tests every other supported directory-record ordering in temporary candidates—case-sensitive, case-insensitive, primary-record order, and accent-folded case-sensitive—and promotes only a candidate that matches every available target hash.
+
 ## 0.8.110 — 2026-09-26
 
 ### Added
