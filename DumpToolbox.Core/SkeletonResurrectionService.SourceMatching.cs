@@ -535,6 +535,38 @@ public sealed partial class SkeletonResurrectionService
                         displayPath,
                         false));
                 }
+                else if (entry.SpecialKind == SkeletonSpecialKind.SystemArea)
+                {
+                    (byte[] Payload, string Description)? toastVariant =
+                        await TryCreateToast25SystemAreaMarkerVariantAsync(
+                            reader,
+                            entry,
+                            cancellationToken).ConfigureAwait(false);
+                    if (toastVariant is not null)
+                    {
+                        string variantSha1 = Convert.ToHexString(
+                            SHA1.HashData(toastVariant.Value.Payload)).ToLowerInvariant();
+                        matches[entry.Path] = new SkeletonSourceMatch(
+                            entry,
+                            imagePath,
+                            variantSha1,
+                            false,
+                            "ISO/BIN image Toast 2.5 SYSTEM_AREA marker variant SHA1",
+                            toastVariant.Value.Description,
+                            entry.ExtentLba,
+                            entry.DataLength,
+                            GeneratedPayload: toastVariant.Value.Payload);
+                        progress?.Report(new SkeletonSourceScanProgress(
+                            processed,
+                            totalItems,
+                            processedBytes,
+                            totalBytes,
+                            entry.Path,
+                            entry.Path,
+                            $"{displayPath} ({toastVariant.Value.Description})",
+                            false));
+                    }
+                }
 
                 processedBytes += entry.DataLength;
                 processed++;
@@ -551,6 +583,115 @@ public sealed partial class SkeletonResurrectionService
 
             return (IReadOnlyDictionary<string, SkeletonSourceMatch>)matches;
         }, cancellationToken);
+
+    private static async Task<(byte[] Payload, string Description)?>
+        TryCreateToast25SystemAreaMarkerVariantAsync(
+            SkeletonImageReader reader,
+            SkeletonContentEntry entry,
+            CancellationToken cancellationToken)
+    {
+        if (entry.ExtentLba != 0 ||
+            entry.DataLength != SystemAreaSectors * CookedSectorSize ||
+            !IsSha1(entry.Sha1))
+        {
+            return null;
+        }
+
+        byte[] source = await ReadSourceImageRegionAsync(
+            reader,
+            entry.ExtentLba,
+            entry.DataLength,
+            cancellationToken).ConfigureAwait(false);
+        if (!IsToast25AppleSystemArea(source))
+            return null;
+
+        string description;
+        if (source.AsSpan(1020, 4).SequenceEqual("MRKS"u8))
+        {
+            source.AsSpan(1020, 4).Clear();
+            description = "Toast 2.5 Apple partition map; MRKS marker removed";
+        }
+        else if (IsAllZero(source.AsSpan(1020, 4)))
+        {
+            "MRKS"u8.CopyTo(source.AsSpan(1020, 4));
+            description = "Toast 2.5 Apple partition map; MRKS marker added";
+        }
+        else
+        {
+            return null;
+        }
+
+        string actualSha1 = Convert.ToHexString(SHA1.HashData(source)).ToLowerInvariant();
+        return actualSha1.Equals(entry.Sha1, StringComparison.OrdinalIgnoreCase)
+            ? (source, description)
+            : null;
+    }
+
+    private static bool IsToast25AppleSystemArea(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != SystemAreaSectors * CookedSectorSize ||
+            !payload[..2].SequenceEqual("ER"u8) ||
+            BinaryPrimitives.ReadUInt16BigEndian(payload.Slice(2, 2)) != 512)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<byte> partitionMap = payload.Slice(512, 512);
+        ReadOnlySpan<byte> hfsPartition = payload.Slice(1024, 512);
+        return partitionMap[..2].SequenceEqual("PM"u8) &&
+               BinaryPrimitives.ReadUInt32BigEndian(partitionMap.Slice(4, 4)) == 2 &&
+               BinaryPrimitives.ReadUInt32BigEndian(partitionMap.Slice(8, 4)) == 1 &&
+               BinaryPrimitives.ReadUInt32BigEndian(partitionMap.Slice(12, 4)) == 2 &&
+               ReadAsciiField(partitionMap.Slice(16, 32)).Equals("MRKS", StringComparison.Ordinal) &&
+               ReadAsciiField(partitionMap.Slice(48, 32)).Equals("Apple_partition_map", StringComparison.Ordinal) &&
+               hfsPartition[..2].SequenceEqual("PM"u8) &&
+               BinaryPrimitives.ReadUInt32BigEndian(hfsPartition.Slice(4, 4)) == 2 &&
+               BinaryPrimitives.ReadUInt32BigEndian(hfsPartition.Slice(8, 4)) > 2 &&
+               BinaryPrimitives.ReadUInt32BigEndian(hfsPartition.Slice(12, 4)) > 0 &&
+               ReadAsciiField(hfsPartition.Slice(16, 32)).Equals("TOAST 2.5 Partition", StringComparison.Ordinal) &&
+               ReadAsciiField(hfsPartition.Slice(48, 32)).Equals("Apple_HFS", StringComparison.Ordinal);
+    }
+
+    private static string ReadAsciiField(ReadOnlySpan<byte> field)
+    {
+        int length = field.IndexOf((byte)0);
+        if (length < 0)
+            length = field.Length;
+        return Encoding.ASCII.GetString(field[..length]).TrimEnd(' ');
+    }
+
+    private static bool IsAllZero(ReadOnlySpan<byte> payload)
+    {
+        foreach (byte value in payload)
+        {
+            if (value != 0)
+                return false;
+        }
+        return true;
+    }
+
+    private static async Task<byte[]> ReadSourceImageRegionAsync(
+        SkeletonImageReader reader,
+        long startLba,
+        long byteLength,
+        CancellationToken cancellationToken)
+    {
+        if (byteLength <= 0 || byteLength > int.MaxValue)
+            throw new InvalidOperationException("Image region length must be positive and fit in memory.");
+
+        byte[] payload = new byte[checked((int)byteLength)];
+        int written = 0;
+        long lba = startLba;
+        while (written < payload.Length)
+        {
+            byte[] sector = await reader.ReadForm1SectorAsync(lba, cancellationToken).ConfigureAwait(false);
+            int count = Math.Min(sector.Length, payload.Length - written);
+            sector.AsSpan(0, count).CopyTo(payload.AsSpan(written, count));
+            written += count;
+            lba++;
+        }
+        return payload;
+    }
 
     private static async Task<string> CalculateSourceImageRegionSha1Async(
         SkeletonImageReader reader,

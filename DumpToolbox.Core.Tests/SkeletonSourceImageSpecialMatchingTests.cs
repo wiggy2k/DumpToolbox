@@ -6,6 +6,81 @@ namespace DumpToolbox.Core.Tests;
 
 public sealed class SkeletonSourceImageSpecialMatchingTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SourceImageMatchesToast25SystemAreaMrksMarkerVariant(bool sourceHasMarker)
+    {
+        const int volumeSectors = 40;
+        const uint rootLba = 20;
+        string root = Path.Combine(Path.GetTempPath(), $"dumptoolbox-toast25-system-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string skeletonPath = Path.Combine(root, "disc.skeleton");
+        string sourcePath = Path.Combine(root, "alternate.bin");
+        string outputPath = Path.Combine(root, "resurrected.bin");
+
+        try
+        {
+            byte[] sourceCooked = BuildMinimalIso(volumeSectors, rootLba);
+            byte[] sourceSystemArea = BuildToast25SystemArea(sourceHasMarker);
+            sourceSystemArea.CopyTo(sourceCooked, 0);
+
+            byte[] targetSystemArea = (byte[])sourceSystemArea.Clone();
+            if (sourceHasMarker)
+                targetSystemArea.AsSpan(1020, 4).Clear();
+            else
+                "MRKS"u8.CopyTo(targetSystemArea.AsSpan(1020, 4));
+
+            byte[] skeletonCooked = (byte[])sourceCooked.Clone();
+            skeletonCooked.AsSpan(0, 16 * 2048).Clear();
+            await File.WriteAllBytesAsync(sourcePath, ToRawMode1(sourceCooked));
+            await File.WriteAllBytesAsync(skeletonPath, ToRawMode1(skeletonCooked));
+
+            var entry = new SkeletonContentEntry(
+                "SYSTEM_AREA",
+                0,
+                16 * 2048,
+                Sha1(targetSystemArea),
+                null,
+                SkeletonSpecialKind.SystemArea,
+                RequiresSource: true);
+            var inspection = new SkeletonInspectionResult(
+                skeletonPath,
+                Path.Combine(root, "disc.hash"),
+                SkeletonImageKind.Raw2352,
+                2352,
+                0,
+                volumeSectors,
+                [entry],
+                "TOAST25_TEST",
+                1,
+                0);
+
+            var service = new SkeletonResurrectionService();
+            IReadOnlyDictionary<string, SkeletonSourceMatch> matches =
+                await service.MatchSourceImageAsync(inspection, sourcePath, useHistoryDatabase: false);
+
+            SkeletonSourceMatch match = Assert.Single(matches).Value;
+            Assert.NotNull(match.GeneratedPayload);
+            Assert.Equal(targetSystemArea, match.GeneratedPayload);
+            Assert.Contains("Toast 2.5", match.MatchMethod);
+
+            SkeletonResurrectionResult result = await service.ResurrectAsync(
+                inspection,
+                matches,
+                outputPath,
+                allowMissing: false);
+
+            Assert.Equal(0, result.MissingEntries);
+            byte[] output = await File.ReadAllBytesAsync(outputPath);
+            Assert.Equal(targetSystemArea, ReadRawUserData(output, 0, 16));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public async Task SourceImageMatchesAndRestoresSystemAreaAndGapRegions()
     {
@@ -110,6 +185,42 @@ public sealed class SkeletonSourceImageSpecialMatchingTests
         WriteDirectoryRecord(directory, 0, rootLba, 2048, 0x02, [0]);
         WriteDirectoryRecord(directory, 34, rootLba, 2048, 0x02, [1]);
         return image;
+    }
+
+    private static byte[] BuildToast25SystemArea(bool includeMrksMarker)
+    {
+        byte[] payload = new byte[16 * 2048];
+        Span<byte> descriptor = payload.AsSpan(0, 512);
+        "ER"u8.CopyTo(descriptor);
+        BinaryPrimitives.WriteUInt16BigEndian(descriptor.Slice(2, 2), 512);
+        BinaryPrimitives.WriteUInt32BigEndian(descriptor.Slice(4, 4), 30);
+
+        Span<byte> partitionMap = payload.AsSpan(512, 512);
+        WriteApplePartitionEntry(partitionMap, 2, 1, 2, "MRKS", "Apple_partition_map");
+        if (includeMrksMarker)
+            "MRKS"u8.CopyTo(partitionMap.Slice(508, 4));
+
+        Span<byte> hfsPartition = payload.AsSpan(1024, 512);
+        WriteApplePartitionEntry(hfsPartition, 2, 20, 8, "TOAST 2.5 Partition", "Apple_HFS");
+        return payload;
+    }
+
+    private static void WriteApplePartitionEntry(
+        Span<byte> entry,
+        uint mapEntries,
+        uint startBlock,
+        uint blockCount,
+        string name,
+        string type)
+    {
+        "PM"u8.CopyTo(entry);
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(4, 4), mapEntries);
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(8, 4), startBlock);
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(12, 4), blockCount);
+        System.Text.Encoding.ASCII.GetBytes(name).CopyTo(entry.Slice(16, 32));
+        System.Text.Encoding.ASCII.GetBytes(type).CopyTo(entry.Slice(48, 32));
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(84, 4), blockCount);
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(88, 4), 0x13);
     }
 
     private static byte[] ToRawMode1(byte[] cooked)

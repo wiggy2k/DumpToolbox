@@ -59,6 +59,8 @@ public static class SkeletoolFixReportService
             return false;
         if (entry.IsEmpty)
             return true;
+        if (SkeletonResurrectionService.CanRecoverKnownGap(inspection, entry))
+            return true;
         return entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
                (string.Equals(
                     entry.Sha1,

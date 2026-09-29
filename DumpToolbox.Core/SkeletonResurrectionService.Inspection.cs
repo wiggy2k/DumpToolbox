@@ -73,10 +73,6 @@ public sealed partial class SkeletonResurrectionService
             }
         }
 
-        IReadOnlyList<string> filesMissingFromHashManifest = FindFilesMissingFromHashManifest(
-            byPath.Keys,
-            manifest.Select(entry => entry.Path));
-
         var unmapped = new List<EntryBuilder>();
         foreach (HashManifestEntry item in manifest)
         {
@@ -149,12 +145,39 @@ public sealed partial class SkeletonResurrectionService
             unmapped.Add(unknown);
         }
 
+        string[] emptyFilesWithInferredSha1 = byPath.Values
+            .Where(entry =>
+                entry.SpecialKind == SkeletonSpecialKind.None &&
+                entry.DataLength == 0 &&
+                string.IsNullOrWhiteSpace(entry.Sha1))
+            .Select(entry => entry.Path)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (string path in emptyFilesWithInferredSha1)
+        {
+            EntryBuilder entry = byPath[path];
+            entry.Sha1 = EmptySha1;
+            entry.Sha1WasInferredFromZeroLength = true;
+        }
+
         var entries = byPath.Values
             .Concat(unmapped)
             .Select(b => b.ToEntry())
             .OrderBy(e => e.SpecialKind == SkeletonSpecialKind.None ? 0 : 1)
             .ThenBy(e => e.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        IReadOnlyList<string> filesMissingFromHashManifest = FindFilesMissingFromHashManifest(
+            entries
+                .Where(entry =>
+                    entry.SpecialKind == SkeletonSpecialKind.None &&
+                    !entry.Sha1WasInferredFromZeroLength)
+                .Select(entry => entry.Path),
+            manifest.Select(entry => entry.Path));
+
+        IReadOnlyList<KnownGapRecoveryInfo> knownGapRecoveries =
+            await TryCreateKnownGapRecoveriesAsync(reader, entries, cancellationToken).ConfigureAwait(false);
+        SubchannelEvidenceAnalysis subchannelEvidence =
+            await AnalyzeCompanionSubchannelAsync(skeleton, entries, cancellationToken).ConfigureAwait(false);
 
         NeroSystemAreaRecoveryInfo? neroSystemAreaRecovery = null;
         KnownSystemAreaRecoveryInfo? knownSystemAreaRecovery = null;
@@ -244,9 +267,13 @@ public sealed partial class SkeletonResurrectionService
             MaterializedSkeletonPath = prepared.WasMaterialized ? prepared.Path : null,
             SkeletonInputFormat = prepared.Format,
             FilesMissingFromHashManifest = filesMissingFromHashManifest,
+            EmptyFilesWithInferredSha1 = emptyFilesWithInferredSha1,
             NeroSystemAreaRecovery = neroSystemAreaRecovery,
             KnownSystemAreaRecovery = knownSystemAreaRecovery,
-            NeroNriWarnings = neroNriWarnings
+            NeroNriWarnings = neroNriWarnings,
+            KnownGapRecoveries = knownGapRecoveries,
+            GapSubchannelEvidence = subchannelEvidence.Evidence,
+            SubchannelEvidenceWarnings = subchannelEvidence.Warnings
         };
     }
 

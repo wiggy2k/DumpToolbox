@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.112 — 2026-09-29
+
+### Added
+
+- Added Sub2TXT to Other Tools for decoding DiscImageCreator/CloneCD `.sub` and Redumper `.subcode`/`.subchannel` files. Conversion runs in the background, pages large results, can jump directly to LBA 0, summarizes CRC-valid MCN and per-track ISRC values, and saves the complete readable output.
+- SkeleTool can now reconstruct Redumper's repeatable zero/`0x55` `GAP_*` layout. Candidates follow Redumper's sector hashing rules and are accepted only when every available manifest SHA-1 matches.
+- SkeleTool now uses companion `.sub`, `.subcode`, and `.subchannel` evidence—including Zstandard-compressed files—to report track/index boundaries and other subchannel evidence around missing GAP regions.
+
+### Changed
+
+- Source-image scans now log explicit GAP and `SYSTEM_AREA` match decisions, distinguishing direct region matches from the source-derived Toast 2.5 `MRKS` marker variant.
+
+### Fixed
+
+- SkeleTool source-image matching now recognizes the Toast 2.5 Apple partition-map `MRKS` reserved-tail variant. It adds or removes only the marker and accepts the generated `SYSTEM_AREA` only when its full manifest SHA-1 matches.
+- SkeleTool now assigns the canonical empty-stream SHA-1 to ordinary zero-length skeleton files omitted from the `.hash` manifest, treating them as satisfied instead of reporting a missing hash/source payload.
+
 ## 0.8.111 — 2026-09-27
 
 ### Added

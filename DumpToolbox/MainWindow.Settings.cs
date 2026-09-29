@@ -220,6 +220,9 @@ public partial class MainWindow
         LoadRememberedPath(FindEndsOutputBox, "FindEnds", "OutputPath");
         SetSelectedIndex(FindEndsModeBox, _userSettings.GetInt("FindEnds", "Mode", 0));
 
+        // Sub2TXT. Rendered text is intentionally not saved.
+        LoadRememberedPath(Sub2TxtInputBox, "Sub2TXT", "InputPath");
+
         // ISO Extractor.
         LoadRememberedPath(IsoExtractImagePathBox, "ISOExtractor", "ImagePath");
         LoadRememberedPath(IsoExtractOutputFolderBox, "ISOExtractor", "OutputFolder");
@@ -352,6 +355,8 @@ public partial class MainWindow
             SaveRememberedPath("FindEnds", "OutputPath", FindEndsOutputBox.Text);
             _userSettings.Set("FindEnds", "Mode", FindEndsModeBox.SelectedIndex);
 
+            SaveRememberedPath("Sub2TXT", "InputPath", Sub2TxtInputBox.Text);
+
             SaveRememberedPath("ISOExtractor", "ImagePath", IsoExtractImagePathBox.Text);
             SaveRememberedPath("ISOExtractor", "OutputFolder", IsoExtractOutputFolderBox.Text);
 
@@ -384,6 +389,7 @@ public partial class MainWindow
             "HashCalcClearSavedInputsButton" => "HashCalc",
             "Base64ClearSavedInputsButton" => "Base64",
             "FindEndsClearSavedInputsButton" => "FindEnds",
+            "Sub2TxtClearSavedInputsButton" => "Sub2TXT",
             "IsoExtractClearSavedInputsButton" => "ISOExtractor",
             _ => null
         };
@@ -484,7 +490,7 @@ public partial class MainWindow
         => _findCrcsCts is not null || _audioRecoveryCts is not null || _iso2BinCts is not null ||
            _mdf2BinCts is not null || _nrg2BinCts is not null || _cdi2BinCts is not null || _skeletonCts is not null || _dicCts is not null || _irdCts is not null ||
            _concatenateCts is not null || _hashCalcCts is not null || _base64Cts is not null ||
-           _findEndsCts is not null || _isoExtractorCts is not null ||
+           _findEndsCts is not null || _sub2TxtCts is not null || _isoExtractorCts is not null ||
            _sha1CatalogueCts is not null || _discEvidenceCts is not null;
 
     private void ResetMainSettingsIni()
@@ -517,6 +523,7 @@ public partial class MainWindow
             ResetSavedInputs("HashCalc");
             ResetSavedInputs("Base64");
             ResetSavedInputs("FindEnds");
+            ResetSavedInputs("Sub2TXT");
             ResetSavedInputs("ISOExtractor");
             MainTabControl.SelectedIndex = 0;
             ConvertTabControl.SelectedIndex = 0;
@@ -571,6 +578,7 @@ public partial class MainWindow
             "HashCalc" => _hashCalcCts is not null,
             "Base64" => _base64Cts is not null,
             "FindEnds" => _findEndsCts is not null,
+            "Sub2TXT" => _sub2TxtCts is not null,
             "ISOExtractor" => _isoExtractorCts is not null,
             _ => false
         };
@@ -694,6 +702,10 @@ public partial class MainWindow
                 FindEndsOutputBox.Text = string.Empty;
                 FindEndsModeBox.SelectedIndex = 0;
                 break;
+            case "Sub2TXT":
+                Sub2TxtInputBox.Text = string.Empty;
+                ClearSub2TxtOutput();
+                break;
             case "ISOExtractor":
                 IsoExtractImagePathBox.Text = string.Empty;
                 IsoExtractOutputFolderBox.Text = string.Empty;
@@ -738,6 +750,7 @@ public partial class MainWindow
             ("HashCalc", "FilePath"),
             ("Base64", "InputFilePath"), ("Base64", "OutputFilePath"),
             ("FindEnds", "PartialPath"), ("FindEnds", "SourcePath"), ("FindEnds", "OutputPath"),
+            ("Sub2TXT", "InputPath"),
             ("ISOExtractor", "ImagePath"), ("ISOExtractor", "OutputFolder")
         };
 

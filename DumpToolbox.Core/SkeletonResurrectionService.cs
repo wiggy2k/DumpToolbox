@@ -49,7 +49,8 @@ public sealed record SkeletonContentEntry(
     byte IsoFileFlags = 0,
     IReadOnlyList<SkeletonAlternateIsoRecord>? AlternateIsoRecords = null,
     string? ManifestPath = null,
-    string? XaManifestPath = null)
+    string? XaManifestPath = null,
+    bool Sha1WasInferredFromZeroLength = false)
 {
     public bool IsSpecial => SpecialKind != SkeletonSpecialKind.None;
     public bool IsEmpty =>
@@ -97,9 +98,13 @@ public sealed record SkeletonInspectionResult(
     public bool SkeletonWasCompressed => MaterializedSkeletonPath is not null;
     public IReadOnlyList<string> FilesMissingFromHashManifest { get; init; } = Array.Empty<string>();
     public int MissingHashEntryCount => FilesMissingFromHashManifest.Count;
+    public IReadOnlyList<string> EmptyFilesWithInferredSha1 { get; init; } = Array.Empty<string>();
     public NeroSystemAreaRecoveryInfo? NeroSystemAreaRecovery { get; init; }
     public KnownSystemAreaRecoveryInfo? KnownSystemAreaRecovery { get; init; }
     public IReadOnlyList<string> NeroNriWarnings { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<KnownGapRecoveryInfo> KnownGapRecoveries { get; init; } = Array.Empty<KnownGapRecoveryInfo>();
+    public IReadOnlyList<GapSubchannelEvidence> GapSubchannelEvidence { get; init; } = Array.Empty<GapSubchannelEvidence>();
+    public IReadOnlyList<string> SubchannelEvidenceWarnings { get; init; } = Array.Empty<string>();
 }
 
 public sealed record SkeletonInputPreparationProgress(
@@ -159,6 +164,38 @@ public sealed record KnownSystemAreaRecoveryInfo(
     string PatternName,
     string ExpectedSystemAreaSha1,
     byte[] Payload);
+
+public sealed record KnownGapRecoveryInfo(
+    string Path,
+    string PatternName,
+    string ExpectedSha1,
+    string? ExpectedXaSha1,
+    uint StartLba,
+    long SectorCount,
+    long Form1SectorCount,
+    long Form2SectorCount,
+    long PreservedSectorCount,
+    IReadOnlySet<long> GeneratedFill55Lbas);
+
+public sealed record GapSubchannelEvidence(
+    string GapPath,
+    string SourcePath,
+    string SourceFormat,
+    long StartLba,
+    long EndLba,
+    long FramesObserved,
+    int? TrackNumber,
+    int? IndexNumber,
+    bool TrackIndexContinuous,
+    bool HasTrackIndexBoundaryAtStart,
+    long PAssertedFrames,
+    long NonZeroRwFrames,
+    long InvalidQCrcCount,
+    IReadOnlyList<long> InvalidQCrcLbas,
+    long QTimeDiscontinuityCount,
+    IReadOnlyList<long> QTimeDiscontinuityLbas,
+    long? LeadOutStartLba,
+    string Summary);
 
 public sealed record DicHfsPartitionInspection(
     string Name,
@@ -239,7 +276,8 @@ public sealed record SkeletonSourceMatch(
     byte[]? GeneratedPayload = null,
     IReadOnlyList<SkeletonSourceImageExtent>? SourceImageExtents = null,
     SkeletoolCatalogueMatchSource? CatalogueSource = null,
-    string? SourceFilesystem = null);
+    string? SourceFilesystem = null,
+    KnownGapRecoveryInfo? GeneratedGapRecovery = null);
 
 public sealed record SkeletonSourceScanProgress(
     int FilesProcessed,
@@ -400,6 +438,7 @@ public sealed partial class SkeletonResurrectionService
         public string? XaSha1 { get; set; }
         public string? ManifestPath { get; set; }
         public string? XaManifestPath { get; set; }
+        public bool Sha1WasInferredFromZeroLength { get; set; }
         public SkeletonSpecialKind SpecialKind { get; }
         public bool CanRestore { get; }
         private readonly List<SkeletonAlternateIsoRecord> _alternateIsoRecords = new();
@@ -414,7 +453,8 @@ public sealed partial class SkeletonResurrectionService
             Path, ExtentLba, DataLength, Sha1, XaSha1, SpecialKind, CanRestore,
             AlternateIsoRecords: _alternateIsoRecords.Count == 0 ? null : _alternateIsoRecords.ToArray(),
             ManifestPath: ManifestPath,
-            XaManifestPath: XaManifestPath);
+            XaManifestPath: XaManifestPath,
+            Sha1WasInferredFromZeroLength: Sha1WasInferredFromZeroLength);
     }
 
     private sealed class SkeletonImageReader : IAsyncDisposable
@@ -500,6 +540,21 @@ public sealed partial class SkeletonResurrectionService
                 return raw.AsSpan(24, CookedSectorSize).ToArray();
 
             throw new InvalidOperationException($"ISO9660 metadata at LBA {lba:N0} is not stored in a Mode 1 / Mode 2 Form 1 sector.");
+        }
+
+        public async Task<byte[]> ReadRawSectorAsync(long lba, CancellationToken cancellationToken)
+        {
+            if (Kind != SkeletonImageKind.Raw2352)
+                throw new InvalidOperationException("Raw-sector access requires a 2352-byte skeleton.");
+
+            long rawIndex = lba - BaseLba;
+            if (rawIndex < 0 || rawIndex >= SectorCount)
+                throw new InvalidOperationException($"Raw CD LBA {lba:N0} is outside the skeleton.");
+
+            byte[] raw = new byte[RawSectorSize];
+            _stream.Position = rawIndex * RawSectorSize;
+            await ReadExactlyAsync(_stream, raw, cancellationToken);
+            return raw;
         }
 
         public async Task<byte[]> ReadForm1BytesAsync(uint lba, uint byteLength, CancellationToken cancellationToken)

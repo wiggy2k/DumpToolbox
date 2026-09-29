@@ -26,7 +26,7 @@ These guides describe the current behaviour of each DumpToolbox function. Histor
 
 | Area | Guide |
 | --- | --- |
-| Other Tools | [Concatenate, HashCalc, Base64 and Find-Ends](OTHER_TOOLS.md) |
+| Other Tools | [Concatenate, HashCalc, Base64, Find-Ends and Sub2TXT](OTHER_TOOLS.md) |
 | Settings | [Saved inputs, catalogues, rules and reset behaviour](SETTINGS.md) |
 | Development | [Build, test, publish and project layout](DEVELOPMENT.md) |
 | Disc Evidence | [Hidden developer evidence scanner](DISC_EVIDENCE.md) |

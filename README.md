@@ -2,7 +2,7 @@
 
 DumpToolbox is a cross-platform .NET 8 and Avalonia desktop application for disc-image conversion, checksum-based recovery, and reconstruction from Redumper, DiscImageCreator, and PlayStation 3 IRD metadata.
 
-Current version: **0.8.111**
+Current version: **0.8.112**
 
 ## Tools
 
@@ -17,7 +17,7 @@ Current version: **0.8.111**
 | SkeleTool | Rebuild Redumper skeleton images from verified payloads | [SkeleTool](docs/SKELETOOL.md) |
 | DIC | Reconstruct raw images from DiscImageCreator evidence | [DIC recovery](docs/DIC_RECOVERY.md) |
 | IRD | Rebuild and optionally encrypt PlayStation 3 ISOs | [IRD rebuilder](docs/IRD_REBUILDER.md) |
-| Other Tools | Concatenate, HashCalc, Base64, Find-Ends and ISO Extractor | [Other Tools](docs/OTHER_TOOLS.md) |
+| Other Tools | Concatenate, HashCalc, Base64, Find-Ends, Sub2TXT and ISO Extractor | [Other Tools](docs/OTHER_TOOLS.md) |
 
 The complete function-oriented documentation is in the [documentation index](docs/README.md). Historical changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
@@ -68,6 +68,7 @@ Other Tools
   HashCalc
   Base64
   Find-Ends
+  Sub2TXT
   ISO Extractor
 Settings
   General

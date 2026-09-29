@@ -226,6 +226,16 @@ public partial class MainWindow : Window
             AppendSkeletonLog($"Detected {kind}.");
             AppendSkeletonLog($"ISO9660 volume: {inspection.VolumeIdentifier}");
             AppendSkeletonLog($"ISO files: {normalFiles:N0}; manifest entries: {inspection.HashEntryCount:N0}; unmapped hashes: {inspection.UnmappedHashEntryCount:N0}.");
+            if (inspection.EmptyFilesWithInferredSha1.Count > 0)
+            {
+                AppendSkeletonLog(
+                    $"EMPTY FILES: inferred the canonical SHA-1 {SkeletonResurrectionService.EmptySha1} for " +
+                    $"{inspection.EmptyFilesWithInferredSha1.Count:N0} zero-length file(s) omitted from the .hash manifest:");
+                foreach (string path in inspection.EmptyFilesWithInferredSha1.Take(100))
+                    AppendSkeletonLog($"  Inferred empty SHA-1: {path}");
+                if (inspection.EmptyFilesWithInferredSha1.Count > 100)
+                    AppendSkeletonLog($"  ...and {inspection.EmptyFilesWithInferredSha1.Count - 100:N0} more.");
+            }
             if (inspection.NeroSystemAreaRecovery is { } nero)
             {
                 AppendSkeletonLog(
@@ -237,6 +247,19 @@ public partial class MainWindow : Window
                 AppendSkeletonLog(
                     $"SYSTEM_AREA: recognized '{knownSystemArea.PatternName}'. The complete 32 KiB payload was generated and verified against the manifest SHA-1.");
             }
+            foreach (KnownGapRecoveryInfo knownGap in inspection.KnownGapRecoveries)
+            {
+                AppendSkeletonLog(
+                    $"{knownGap.Path}: recognized {knownGap.PatternName}. The generated payload pattern was verified against the manifest SHA-1.");
+            }
+            foreach (GapSubchannelEvidence evidence in inspection.GapSubchannelEvidence)
+            {
+                AppendSkeletonLog(
+                    $"SUBCHANNEL — {evidence.GapPath}: {evidence.Summary}. " +
+                    $"Source: {Path.GetFileName(evidence.SourcePath)} ({evidence.SourceFormat}).");
+            }
+            foreach (string warning in inspection.SubchannelEvidenceWarnings)
+                AppendSkeletonLog("WARNING — SUBCHANNEL: " + warning);
             foreach (string warning in inspection.NeroNriWarnings)
                 AppendSkeletonLog("WARNING — NERO NRI: " + warning);
 
@@ -414,6 +437,7 @@ public partial class MainWindow : Window
                 _skeletonInspection, image, false, progress, _skeletonCts.Token);
             _skeletonMatches = MergeSkeletonMatches(_skeletonMatches, found);
             MarkSkeletonMissingStatuses();
+            LogSourceImageSpecialMatches(found.Values);
             AppendSkeletonLog($"Source image scan complete. Added/retained {found.Count:N0} matching entry/entries; cumulative matches: {_skeletonMatches.Count:N0}.");
             SkeletonProgressBar.Value = 100;
             SkeletonProgressText.Text = $"{_skeletonMatches.Count:N0} matched";
@@ -423,6 +447,36 @@ public partial class MainWindow : Window
         finally
         {
             _skeletonCts?.Dispose(); _skeletonCts = null; SetSkeletonRunning(false); UpdateSkeletonActionButtons();
+        }
+    }
+
+    private void LogSourceImageSpecialMatches(IEnumerable<SkeletonSourceMatch> matches)
+    {
+        foreach (SkeletonSourceMatch match in matches
+                     .Where(candidate => candidate.Entry.SpecialKind is
+                         SkeletonSpecialKind.SystemArea or SkeletonSpecialKind.Gap)
+                     .OrderBy(candidate => candidate.Entry.SpecialKind)
+                     .ThenBy(candidate => candidate.Entry.Path, StringComparer.OrdinalIgnoreCase))
+        {
+            if (match.Entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
+                match.GeneratedPayload is not null &&
+                match.MatchMethod.Contains("Toast 2.5", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendSkeletonLog(
+                    $"SYSTEM_AREA: matched source image using the verified Toast 2.5 MRKS marker variant; " +
+                    $"SHA-1 {match.Sha1} MATCH");
+                continue;
+            }
+
+            string lba = match.SourceImageLba is long sourceLba
+                ? $" at LBA {sourceLba:N0}"
+                : string.Empty;
+            string length = match.SourceLength is long sourceLength
+                ? $" ({sourceLength:N0} logical bytes)"
+                : string.Empty;
+            AppendSkeletonLog(
+                $"{match.Entry.Path}: matched source image region{lba}{length}; " +
+                $"SHA-1 {match.Sha1} MATCH");
         }
     }
 
@@ -509,6 +563,7 @@ public partial class MainWindow : Window
             !(e.SpecialKind == SkeletonSpecialKind.SystemArea &&
               (string.Equals(e.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
                systemAreaIsGenerated)) &&
+            !SkeletonResurrectionService.CanRecoverKnownGap(inspection, e) &&
             (!string.IsNullOrWhiteSpace(e.Sha1) || !string.IsNullOrWhiteSpace(e.XaSha1)));
     }
 
@@ -724,6 +779,8 @@ public partial class MainWindow : Window
             return false;
         if (entry.IsEmpty)
             return true;
+        if (SkeletonResurrectionService.CanRecoverKnownGap(inspection, entry))
+            return true;
         return entry.SpecialKind == SkeletonSpecialKind.SystemArea &&
                (string.Equals(entry.Sha1, SkeletonResurrectionService.ZeroSystemAreaSha1, StringComparison.OrdinalIgnoreCase) ||
                 SkeletonResurrectionService.CanGenerateSystemArea(inspection));
@@ -777,6 +834,13 @@ public partial class MainWindow : Window
         {
             node.Status = "✓ GENERATE";
             node.SourcePath = inspection.KnownSystemAreaRecovery!.PatternName;
+        }
+        else if (SkeletonResurrectionService.CanRecoverKnownGap(inspection, entry))
+        {
+            KnownGapRecoveryInfo knownGap = inspection.KnownGapRecoveries.First(info =>
+                info.Path.Equals(entry.Path, StringComparison.OrdinalIgnoreCase));
+            node.Status = "✓ GENERATE";
+            node.SourcePath = knownGap.PatternName;
         }
         else if (string.IsNullOrWhiteSpace(entry.Sha1) && string.IsNullOrWhiteSpace(entry.XaSha1))
         {

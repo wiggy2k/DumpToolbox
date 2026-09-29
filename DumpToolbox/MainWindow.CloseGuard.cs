@@ -7,6 +7,7 @@ public partial class MainWindow
 
     private void InitializeCloseGuard()
     {
+        Closed += (_, _) => DeleteSub2TxtTemporaryOutput();
         Closing += async (_, e) =>
         {
             if (_closeConfirmed)
@@ -64,6 +65,7 @@ public partial class MainWindow
         if (_hashCalcCts is not null) active.Add("Hash calculator");
         if (_base64Cts is not null) active.Add("Base64");
         if (_findEndsCts is not null) active.Add("Find Ends");
+        if (_sub2TxtCts is not null) active.Add("Sub2TXT");
         if (_isoExtractorCts is not null) active.Add("ISO Extractor");
         if (_sha1CatalogueCts is not null) active.Add("SHA-1 Database scan");
         if (_audioHeadsTailsCts is not null) active.Add("Heads and Tails scan");

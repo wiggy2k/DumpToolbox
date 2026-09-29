@@ -22,6 +22,10 @@ Rebuilds a file missing one contiguous prefix or suffix when the complete size, 
 
 CRC32 combination/inversion derives the required missing-block CRC without knowing its bytes. A rolling search locates candidates in the optional source, and the virtual reconstructed file must match the complete MD5 before output is accepted. The partial and source files are never overwritten.
 
+## Sub2TXT
+
+Opens either a DiscImageCreator/CloneCD 96-byte-per-sector de-interleaved `.sub` file or a Redumper multiplexed `.subcode`/`.subchannel` file and displays its P, Q, and R–W data in DiscImageCreator's `_subReadable.txt` layout. The input format is detected automatically. Redumper's full-file sector positions, beginning at LBA -45150, are retained. Q-channel control, address, track/index, relative time, absolute time, catalogue, and ISRC fields are decoded where present. Dedicated MCN and ISRC boxes summarize valid, non-blank ADR 2 and ADR 3 values after checking their Q-channel CRC and field format. Conversion runs in the background, and the viewer pages through 500 sectors at a time so large subchannel files remain responsive. **Jump to LBA 0** opens and scrolls directly to the LBA 0 entry. **Save as...** writes the complete output, not just the visible page; the source file is never modified.
+
 ## XML DAT input
 
 FindCRCs and Audio accept complete DAT files, `<game>`/`<machine>` fragments, or bare `<rom>` elements. Each usable ROM needs `size` and `crc`; optional name, MD5 and SHA-1 values are retained.

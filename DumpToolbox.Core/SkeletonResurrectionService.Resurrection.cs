@@ -24,6 +24,23 @@ public sealed partial class SkeletonResurrectionService
         IProgress<NeroSystemAreaRecoveryProgress>? neroSystemAreaProgress = null)
     {
         IReadOnlyDictionary<string, SkeletonSourceMatch> effectiveMatches = matches;
+        IReadOnlyList<SkeletonSourceMatch> generatedGapMatches = RecoverKnownGaps(inspection)
+            .Where(match => !effectiveMatches.ContainsKey(match.Entry.Path))
+            .ToArray();
+        if (generatedGapMatches.Count > 0)
+        {
+            var augmented = new Dictionary<string, SkeletonSourceMatch>(effectiveMatches, StringComparer.OrdinalIgnoreCase);
+            foreach (SkeletonSourceMatch generated in generatedGapMatches)
+            {
+                augmented[generated.Entry.Path] = generated;
+                KnownGapRecoveryInfo info = generated.GeneratedGapRecovery!;
+                activity?.Report(
+                    $"{generated.Entry.Path}: generated {info.PatternName}; " +
+                    $"manifest SHA-1 {generated.Sha1} MATCH");
+            }
+            effectiveMatches = augmented;
+        }
+
         if (CanRecoverKnownSystemArea(inspection) && !effectiveMatches.ContainsKey("SYSTEM_AREA"))
         {
             SkeletonSourceMatch generated = RecoverKnownSystemArea(inspection);
@@ -1197,7 +1214,7 @@ public sealed partial class SkeletonResurrectionService
                         if (currentSector < plan.MaxEndSectorIndex)
                             continue;
 
-                        if (!plan.RegenerateOnly && plan.Consumed != plan.SourceLength)
+                        if (!plan.RegenerateOnly && plan.KnownGapRecovery is null && plan.Consumed != plan.SourceLength)
                         {
                             throw new InvalidOperationException(
                                 $"Could only place {plan.Consumed:N0} of {plan.SourceLength:N0} source bytes for '{plan.Entry.Path}'. " +
@@ -1240,7 +1257,7 @@ public sealed partial class SkeletonResurrectionService
                         if (kind != RawSectorPayloadKind.Unsupported)
                             rebuiltKind = kind;
 
-                        bool complete = plan.RegenerateOnly
+                        bool complete = plan.RegenerateOnly || plan.KnownGapRecovery is not null
                             ? currentSector + 1 >= plan.MaxEndSectorIndex
                             : plan.Consumed >= plan.SourceLength;
 
@@ -1314,7 +1331,7 @@ public sealed partial class SkeletonResurrectionService
 
             foreach (RawSequentialPlan plan in activePlans)
             {
-                if (!plan.RegenerateOnly && plan.Consumed != plan.SourceLength)
+                if (!plan.RegenerateOnly && plan.KnownGapRecovery is null && plan.Consumed != plan.SourceLength)
                 {
                     throw new InvalidOperationException(
                         $"Could only place {plan.Consumed:N0} of {plan.SourceLength:N0} source bytes for '{plan.Entry.Path}'. " +
@@ -1379,6 +1396,35 @@ public sealed partial class SkeletonResurrectionService
             SkeletonContentEntry effectiveEntry = resolvedMatch.Entry;
             long sourceFileLength = GetMatchSourceLength(resolvedMatch);
             bool usePhysicalPayloadMap = inspection.SourceKind == SkeletonSourceKind.DiscImageCreator;
+
+            if (resolvedMatch.GeneratedGapRecovery is { } knownGap)
+            {
+                if (effectiveEntry.SpecialKind != SkeletonSpecialKind.Gap ||
+                    !effectiveEntry.Path.Equals(knownGap.Path, StringComparison.OrdinalIgnoreCase) ||
+                    effectiveEntry.ExtentLba != knownGap.StartLba)
+                {
+                    throw new InvalidOperationException(
+                        $"Generated GAP recovery information does not match '{effectiveEntry.Path}'.");
+                }
+
+                long startSectorIndex = (long)knownGap.StartLba - inspection.BaseLba;
+                long maxEndSectorIndex = checked(startSectorIndex + knownGap.SectorCount);
+                if (startSectorIndex < 0 || maxEndSectorIndex > inspection.SectorCount)
+                    throw new InvalidOperationException($"Generated extent for '{effectiveEntry.Path}' is outside the raw skeleton image.");
+
+                plans.Add(new RawSequentialPlan(
+                    effectiveEntry,
+                    resolvedMatch,
+                    startSectorIndex,
+                    maxEndSectorIndex,
+                    0,
+                    0,
+                    regenerateOnly: false,
+                    usePhysicalPayloadMap: false,
+                    completesEntry: true,
+                    knownGapRecovery: knownGap));
+                continue;
+            }
 
             if (usePhysicalPayloadMap && sourceFileLength != effectiveEntry.DataLength)
             {
@@ -1712,6 +1758,13 @@ public sealed partial class SkeletonResurrectionService
             return;
         }
 
+        if (plan.KnownGapRecovery is { } knownGap)
+        {
+            activity?.Report(
+                $"{plan.Entry.Path}: applying verified {knownGap.PatternName}; invalid-mode sectors remain untouched.");
+            return;
+        }
+
         SkeletonSourceMatch match = plan.Match
             ?? throw new InvalidOperationException($"No source match is available for '{plan.Entry.Path}'.");
         // Use the logical match stream rather than opening SourcePath directly.
@@ -1731,6 +1784,36 @@ public sealed partial class SkeletonResurrectionService
     {
         cancellationToken.ThrowIfCancellationRequested();
         var sector = block.AsSpan(sectorOffset, RawSectorSize);
+
+        if (plan.KnownGapRecovery is { } knownGap)
+        {
+            // Match Redumper's Image_BIN_Reader exactly here: malformed sync or a
+            // mode byte other than literal 1/2 contributes no payload to the GAP
+            // hash and was never erased from the skeleton.
+            if (!sector.Slice(0, SyncPattern.Length).SequenceEqual(SyncPattern) ||
+                sector[15] is not (1 or 2))
+            {
+                return RawSectorPayloadKind.Unsupported;
+            }
+
+            if (knownGap.GeneratedFill55Lbas.Contains(lba))
+            {
+                // Redumper's generated data sector keeps sync/header and fills every
+                // byte after it with 0x55. Deliberately do not regenerate EDC/ECC.
+                sector.Slice(16, RawSectorSize - 16).Fill(0x55);
+                return RawSectorPayloadKind.Unsupported;
+            }
+
+            // The candidate hash proved that every remaining erased logical payload
+            // is zero. It is already zero in the skeleton; rebuild only its protection
+            // fields after returning the exact physical payload kind.
+            return sector[15] == 1
+                ? RawSectorPayloadKind.Mode1
+                : (sector[18] & XaForm2Bit) != 0
+                    ? RawSectorPayloadKind.Mode2Form2
+                    : RawSectorPayloadKind.Mode2Form1;
+        }
+
         if (!sector.Slice(0, SyncPattern.Length).SequenceEqual(SyncPattern))
             throw new InvalidOperationException($"Raw sector sync is invalid at LBA {lba:N0}.");
 
@@ -1895,7 +1978,8 @@ public sealed partial class SkeletonResurrectionService
             long sourceLength,
             bool regenerateOnly,
             bool usePhysicalPayloadMap,
-            bool completesEntry)
+            bool completesEntry,
+            KnownGapRecoveryInfo? knownGapRecovery = null)
         {
             Entry = entry;
             Match = match;
@@ -1906,6 +1990,7 @@ public sealed partial class SkeletonResurrectionService
             RegenerateOnly = regenerateOnly;
             UsePhysicalPayloadMap = usePhysicalPayloadMap;
             CompletesEntry = completesEntry;
+            KnownGapRecovery = knownGapRecovery;
         }
 
         public SkeletonContentEntry Entry { get; }
@@ -1917,6 +2002,7 @@ public sealed partial class SkeletonResurrectionService
         public bool RegenerateOnly { get; }
         public bool UsePhysicalPayloadMap { get; }
         public bool CompletesEntry { get; }
+        public KnownGapRecoveryInfo? KnownGapRecovery { get; }
         public long Consumed { get; set; }
         public Stream? SourceStream { get; set; }
 

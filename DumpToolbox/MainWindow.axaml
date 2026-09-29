@@ -838,6 +838,48 @@
             </Grid>
           </Grid>
         </TabItem>
+
+        <TabItem Header="Sub2TXT">
+          <Grid Margin="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,*" RowSpacing="10">
+            <TextBlock Grid.Row="0" TextWrapping="Wrap" Text="View a DiscImageCreator/CloneCD de-interleaved .sub or Redumper multiplexed .subcode/.subchannel file as readable P–W subchannel data. The format is detected automatically; the display follows DiscImageCreator's _subReadable.txt layout and can be saved as a text file."/>
+
+            <Grid Grid.Row="1" ColumnDefinitions="150,*,Auto" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" VerticalAlignment="Center" Text="Subchannel file" FontWeight="SemiBold"/>
+              <TextBox x:Name="Sub2TxtInputBox" Grid.Column="1" Watermark="Choose a .sub, .subcode, or .subchannel file..."/>
+              <Button x:Name="Sub2TxtBrowseButton" Grid.Column="2" Click="Sub2TxtBrowseButton_Click" Classes="icon-button" ToolTip.Tip="Browse…"><PathIcon Width="18" Height="18" Data="M3,5 C3,3.9 3.9,3 5,3 H9 L11,5 H19 C20.1,5 21,5.9 21,7 V8 H6.2 L3,18.5 Z M6.2,9 H22 L19,20 H3 Z"/></Button>
+            </Grid>
+
+            <Grid Grid.Row="2" ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
+              <Button x:Name="Sub2TxtViewButton" Grid.Column="0" Content="View" Padding="20,7" Click="Sub2TxtViewButton_Click"/>
+              <Button x:Name="Sub2TxtCancelButton" Grid.Column="1" Content="Cancel" Click="Sub2TxtCancelButton_Click" IsEnabled="False"/>
+              <Button x:Name="Sub2TxtSaveButton" Grid.Column="2" Content="Save as..." Click="Sub2TxtSaveButton_Click" IsEnabled="False"/>
+              <Button x:Name="Sub2TxtClearButton" Grid.Column="3" Content="Clear" Click="Sub2TxtClearButton_Click"/>
+              <TextBlock x:Name="Sub2TxtStatusText" Grid.Column="4" Text="Ready" VerticalAlignment="Center" TextAlignment="Right" TextTrimming="CharacterEllipsis"/>
+              <Button x:Name="Sub2TxtClearSavedInputsButton" Grid.Column="5" Click="ClearSavedInputsButton_Click" Classes="icon-button" ToolTip.Tip="Clear saved inputs"><PathIcon Width="17" Height="17" Data="M7,4 H10 L11,3 H13 L14,4 H17 V6 H7 Z M8,7 H16 L15,21 H9 Z"/></Button>
+            </Grid>
+
+            <ProgressBar x:Name="Sub2TxtProgressBar" Grid.Row="3" Minimum="0" Maximum="100" Height="18"/>
+
+            <Grid Grid.Row="4" ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Text="MCN" FontWeight="SemiBold" VerticalAlignment="Center"/>
+              <TextBox x:Name="Sub2TxtMcnBox" Grid.Column="1" IsReadOnly="True" Watermark="Not present"/>
+              <TextBlock Grid.Column="2" Text="ISRC" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,0,0"/>
+              <TextBox x:Name="Sub2TxtIsrcBox" Grid.Column="3" IsReadOnly="True" Watermark="Not present"/>
+            </Grid>
+
+            <Grid Grid.Row="5" RowDefinitions="Auto,*" RowSpacing="5">
+              <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Text="Readable subchannel data" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <TextBlock x:Name="Sub2TxtPageText" Grid.Column="2" VerticalAlignment="Center"/>
+                <Button x:Name="Sub2TxtJumpToLbaZeroButton" Grid.Column="3" Content="Jump to LBA 0" Click="Sub2TxtJumpToLbaZeroButton_Click" IsEnabled="False"/>
+                <Button x:Name="Sub2TxtPreviousPageButton" Grid.Column="4" Content="Previous page" Click="Sub2TxtPreviousPageButton_Click" IsEnabled="False"/>
+                <Button x:Name="Sub2TxtNextPageButton" Grid.Column="5" Content="Next page" Click="Sub2TxtNextPageButton_Click" IsEnabled="False"/>
+              </Grid>
+              <TextBox x:Name="Sub2TxtOutputBox" Grid.Row="1" AcceptsReturn="True" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="monospace" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto" TextAlignment="Left"/>
+            </Grid>
+          </Grid>
+        </TabItem>
+
       <TabItem x:Name="IsoExtractorTabItem" Header="ISO Extractor">
       <Grid Margin="12" RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="10">
         <TextBlock Grid.Row="0" TextWrapping="Wrap" Text="Extract ISO9660, Joliet, or UDF files directly from ISO/BIN/IMG disc images. ISO/Joliet record identity and UDF source paths are preserved in a DumpToolbox manifest-aware source folder for the DIC tab."/>
