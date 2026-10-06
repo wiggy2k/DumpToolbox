@@ -7,6 +7,57 @@ namespace DumpToolbox.Core.Tests;
 public sealed class SkeletonSourceImageSpecialMatchingTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ShortDonorGapUsesZerosOnlyWhenHashMatches(bool raw, bool wrongHash)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"gap-tail-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            byte[] donor = BuildMinimalIso(24, 20);
+            donor.AsSpan(22 * 2048, 2 * 2048).Fill(0xA5);
+            byte[] expected = new byte[26 * 2048];
+            donor.CopyTo(expected, 0);
+            string source = Path.Combine(root, raw ? "donor.bin" : "donor.iso");
+            string skeleton = Path.Combine(root, "disc.skeleton");
+            byte[] erased = (byte[])expected.Clone();
+            erased.AsSpan(22 * 2048).Clear();
+            await File.WriteAllBytesAsync(source, raw ? ToRawMode1(donor) : donor);
+            await File.WriteAllBytesAsync(skeleton, ToRawMode1(erased));
+            var entry = new SkeletonContentEntry("GAP_0000022", 22, 4 * 2048,
+                wrongHash ? new string('1', 40) : Sha1(expected.AsSpan(22 * 2048)), null,
+                SkeletonSpecialKind.Gap, RequiresSource: true);
+            var inspection = new SkeletonInspectionResult(skeleton, Path.Combine(root, "disc.hash"),
+                SkeletonImageKind.Raw2352, 2352, 0, 26, [entry], "SPECIAL_TEST", 1, 0);
+            var service = new SkeletonResurrectionService();
+            var matches = await service.MatchSourceImageAsync(inspection, source, useHistoryDatabase: false);
+            if (wrongHash)
+            {
+                Assert.Empty(matches);
+                return;
+            }
+            var match = Assert.Single(matches).Value;
+            Assert.Equal(4096, match.SourceZeroPaddingBytes);
+            Assert.Equal(8192, match.SourceLength);
+            Assert.Equal(4096, Assert.Single(match.SourceImageExtents!).Length);
+            using (var stream = new OpticalImageExtentStream(source, match.SourceImageExtents!, 8192, 4096))
+            {
+                stream.Seek(4090, SeekOrigin.Begin);
+                byte[] boundary = new byte[20];
+                stream.ReadExactly(boundary);
+                Assert.All(boundary[..6], value => Assert.Equal(0xA5, value));
+                Assert.All(boundary[6..], value => Assert.Equal(0, value));
+            }
+            string output = Path.Combine(root, "output.bin");
+            await service.ResurrectAsync(inspection, matches, output, allowMissing: false);
+            Assert.Equal(expected, ReadRawUserData(await File.ReadAllBytesAsync(output), 0, 26));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task SourceImageMatchesToast25SystemAreaMrksMarkerVariant(bool sourceHasMarker)

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 using DumpToolbox.Core;
 using SharpCompress.Compressors.ZStandard;
 
@@ -7,6 +8,213 @@ namespace DumpToolbox.Core.Tests;
 
 public sealed class KnownGapRecoveryTests
 {
+    [Theory]
+    [InlineData("TOAST 2.5 Partition", 2, 0x13)]
+    [InlineData("Toast 3.0.5 PPC HFS Optimizer", 2, 0x13)]
+    [InlineData("Toast 4.1.3 HFS Optimizer", 2, 0x13)]
+    [InlineData("Toast 5.2.3 HFS Optimizer", 2, 0x33)]
+    [InlineData("Toast 6.0.3 HFS Optimizer", 2, 0x33)]
+    [InlineData("Toast 7.0 HFS Optimizer", 2, 0x33)]
+    [InlineData("Toast 9.0.1 HFS Optimizer", 35, 0x33)]
+    [InlineData("Toast 9.0.5 HFS Optimizer", 35, 0x33)]
+    public async Task ToastClassicHfsRuleSupportsObservedVersionFamiliesWithoutInventingHfsOnlyContent(
+        string partitionName,
+        int partitionMapBlocks,
+        int status)
+    {
+        const int trackBaseLba = 51199;
+        const int trackSectors = 851;
+        const uint volumeEndLba = 51898;
+        const uint rootLba = 51220;
+        const uint firstFileLba = 51298;
+        string root = Path.Combine(Path.GetTempPath(), $"dumptoolbox-toast-hfs-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string skeletonPath = Path.Combine(root, "track.skeleton");
+        string hashPath = Path.Combine(root, "track.hash");
+
+        try
+        {
+            byte[] cooked = BuildSplitTrackIso(
+                trackSectors,
+                trackBaseLba,
+                volumeEndLba,
+                rootLba,
+                firstFileLba);
+            AddToastClassicHfsEvidence(cooked, trackBaseLba, volumeEndLba);
+            byte[] expectedSystemArea = BuildToastClassicSystemArea(
+                partitionName,
+                checked((uint)partitionMapBlocks),
+                checked((uint)status));
+
+            await File.WriteAllBytesAsync(skeletonPath, ToRawMode1(cooked, trackBaseLba));
+            await File.WriteAllTextAsync(
+                hashPath,
+                $"{Sha1(expectedSystemArea)} SYSTEM_AREA{Environment.NewLine}" +
+                $"{new string('1', 40)} GAP_0000023{Environment.NewLine}");
+
+            SkeletonInspectionResult inspection = await new SkeletonResurrectionService()
+                .InspectAsync(skeletonPath, hashPath);
+
+            ToastHybridRecoveryAssessment assessment = Assert.IsType<ToastHybridRecoveryAssessment>(
+                inspection.ToastHybridRecovery);
+            Assert.Equal("GAP_0000023", assessment.GapPath);
+            Assert.Equal("GoM", assessment.HfsVolumeName);
+            Assert.Equal(51229, assessment.HfsPartitionStartLba);
+            Assert.Equal(0, assessment.HfsPartitionStartByteOffset);
+            Assert.Equal(2676u, assessment.HfsPartitionBlockCount);
+            Assert.Equal(58, assessment.UnexplainedAllocatedSectors);
+            Assert.Equal(19u, assessment.HfsFileCount);
+            Assert.Equal(3u, assessment.HfsDirectoryCount);
+            Assert.Equal(51231, assessment.HfsCatalogStartLba);
+            Assert.Equal(0, assessment.HfsCatalogStartByteOffset);
+            Assert.Equal(18_432u, assessment.HfsCatalogFileSize);
+            Assert.True(assessment.HfsCatalogCoveredByGap);
+            Assert.False(assessment.CanReconstructExactly);
+            Assert.Empty(inspection.KnownGapRecoveries);
+            Assert.Equal(expectedSystemArea, inspection.KnownSystemAreaRecovery?.Payload);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ToastClassicHfsRuleCopiesSurvivingAlternateMdbAndRecognizesZeroTail()
+    {
+        const int trackBaseLba = 51199;
+        const int trackSectors = 851;
+        const uint volumeEndLba = 51898;
+        const uint rootLba = 51220;
+        const uint firstFileLba = 51298;
+        const int firstGapRelativeLba = 23;
+        const int firstGapSectors = 76;
+        const int tailRelativeLba = 699;
+        const int tailSectors = 152;
+        string root = Path.Combine(Path.GetTempPath(), $"dumptoolbox-toast-mdb-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string skeletonPath = Path.Combine(root, "track.skeleton");
+        string hashPath = Path.Combine(root, "track.hash");
+        string outputPath = Path.Combine(root, "track-resurrected.bin");
+
+        try
+        {
+            byte[] cooked = BuildSplitTrackIso(
+                trackSectors,
+                trackBaseLba,
+                volumeEndLba,
+                rootLba,
+                firstFileLba);
+            AddToastClassicHfsEvidence(cooked, trackBaseLba, volumeEndLba);
+
+            byte[] expectedCooked = (byte[])cooked.Clone();
+            int alternateMdbOffset = checked(((int)volumeEndLba - trackBaseLba - 1) * 2048 + 1024);
+            int primaryMdbOffset = checked((51229 - trackBaseLba) * 2048 + 1024);
+            Buffer.BlockCopy(expectedCooked, alternateMdbOffset, expectedCooked, primaryMdbOffset, 512);
+            byte[] expectedGap = expectedCooked.AsSpan(
+                firstGapRelativeLba * 2048,
+                firstGapSectors * 2048).ToArray();
+
+            await File.WriteAllBytesAsync(skeletonPath, ToRawMode1(cooked, trackBaseLba));
+            await File.WriteAllTextAsync(
+                hashPath,
+                $"{Sha1(expectedGap)} GAP_{firstGapRelativeLba:D7}{Environment.NewLine}" +
+                $"{Sha1(new byte[tailSectors * 2048])} GAP_{tailRelativeLba:D7}{Environment.NewLine}");
+
+            var service = new SkeletonResurrectionService();
+            SkeletonInspectionResult inspection = await service.InspectAsync(skeletonPath, hashPath);
+
+            Assert.Equal(2, inspection.KnownGapRecoveries.Count);
+            KnownGapRecoveryInfo metadata = Assert.Single(
+                inspection.KnownGapRecoveries,
+                recovery => recovery.Path == $"GAP_{firstGapRelativeLba:D7}");
+            Assert.Equal(expectedGap, metadata.GeneratedPayload);
+            Assert.Contains("alternate MDB", metadata.PatternName, StringComparison.Ordinal);
+
+            KnownGapRecoveryInfo tail = Assert.Single(
+                inspection.KnownGapRecoveries,
+                recovery => recovery.Path == $"GAP_{tailRelativeLba:D7}");
+            Assert.Null(tail.GeneratedPayload);
+            Assert.Equal("Toast 152-sector zero post-HFS tail", tail.PatternName);
+
+            SkeletonResurrectionResult result = await service.ResurrectAsync(
+                inspection,
+                new Dictionary<string, SkeletonSourceMatch>(),
+                outputPath,
+                allowMissing: false);
+
+            Assert.Equal(0, result.MissingEntries);
+            Assert.Equal(ToRawMode1(expectedCooked, trackBaseLba), await File.ReadAllBytesAsync(outputPath));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task SplitTrackGapManifestLbasAreResolvedAgainstRawTrackBase()
+    {
+        const int trackBaseLba = 51199;
+        const int trackSectors = 851;
+        const uint rootLba = 51220;
+        const uint firstFileLba = 51298;
+        const uint volumeEndLba = 51898;
+        const uint firstGapRelativeLba = 23;
+        const uint secondGapRelativeLba = 699;
+        const int firstGapSectors = 76;
+        const int secondGapSectors = 152;
+        string root = Path.Combine(Path.GetTempPath(), $"dumptoolbox-split-track-gap-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string skeletonPath = Path.Combine(root, "track.skeleton");
+        string sourcePath = Path.Combine(root, "track.bin");
+        string hashPath = Path.Combine(root, "track.hash");
+
+        try
+        {
+            byte[] cooked = BuildSplitTrackIso(
+                trackSectors,
+                trackBaseLba,
+                volumeEndLba,
+                rootLba,
+                firstFileLba);
+            byte[] raw = ToRawMode1(cooked, trackBaseLba);
+            await File.WriteAllBytesAsync(skeletonPath, raw);
+            await File.WriteAllBytesAsync(sourcePath, raw);
+            await File.WriteAllTextAsync(
+                hashPath,
+                $"{Sha1(new byte[firstGapSectors * 2048])} GAP_{firstGapRelativeLba:D7}{Environment.NewLine}" +
+                $"{Sha1(new byte[secondGapSectors * 2048])} GAP_{secondGapRelativeLba:D7}{Environment.NewLine}");
+
+            var service = new SkeletonResurrectionService();
+            SkeletonInspectionResult inspection = await service.InspectAsync(skeletonPath, hashPath);
+
+            Assert.Equal(trackBaseLba, inspection.BaseLba);
+            SkeletonContentEntry firstGap = Assert.Single(
+                inspection.Entries,
+                entry => entry.Path == $"GAP_{firstGapRelativeLba:D7}");
+            Assert.Equal((uint)(trackBaseLba + firstGapRelativeLba), firstGap.ExtentLba);
+            Assert.Equal(firstGapSectors * 2048L, firstGap.DataLength);
+
+            SkeletonContentEntry secondGap = Assert.Single(
+                inspection.Entries,
+                entry => entry.Path == $"GAP_{secondGapRelativeLba:D7}");
+            Assert.Equal((uint)(trackBaseLba + secondGapRelativeLba), secondGap.ExtentLba);
+            Assert.Equal(secondGapSectors * 2048L, secondGap.DataLength);
+
+            Assert.Equal(2, inspection.KnownGapRecoveries.Count);
+            IReadOnlyDictionary<string, SkeletonSourceMatch> matches =
+                await service.MatchSourceImageAsync(inspection, sourcePath, useHistoryDatabase: false);
+            Assert.Equal(2, matches.Count);
+            Assert.All(matches.Values, match =>
+                Assert.Contains("image GAP logical payload SHA1", match.MatchMethod, StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public async Task RedumperZeroFill55AndInvalidSectorGapIsGeneratedAndRestoredExactly()
     {
@@ -241,7 +449,116 @@ public sealed class KnownGapRecoveryTests
         return image;
     }
 
-    private static byte[] ToRawMode1(byte[] cooked)
+    private static byte[] BuildSplitTrackIso(
+        int trackSectors,
+        int trackBaseLba,
+        uint volumeEndLba,
+        uint rootLba,
+        uint firstFileLba)
+    {
+        byte[] image = new byte[trackSectors * 2048];
+        Span<byte> pvd = image.AsSpan(16 * 2048, 2048);
+        pvd[0] = 1;
+        "CD001"u8.CopyTo(pvd[1..]);
+        pvd[6] = 1;
+        pvd.Slice(40, 32).Fill((byte)' ');
+        "SPLIT_TRACK_TEST"u8.CopyTo(pvd[40..]);
+        WriteBothEndian32(pvd, 80, volumeEndLba);
+        WriteDirectoryRecord(pvd, 156, rootLba, 2048, 0x02, [0]);
+
+        Span<byte> terminator = image.AsSpan(17 * 2048, 2048);
+        terminator[0] = 0xFF;
+        "CD001"u8.CopyTo(terminator[1..]);
+        terminator[6] = 1;
+
+        int rootIndex = checked((int)rootLba - trackBaseLba);
+        Span<byte> directory = image.AsSpan(rootIndex * 2048, 2048);
+        int offset = 0;
+        offset += WriteDirectoryRecord(directory, offset, rootLba, 2048, 0x02, [0]);
+        offset += WriteDirectoryRecord(directory, offset, rootLba, 2048, 0x02, [1]);
+        WriteDirectoryRecord(directory, offset, firstFileLba, 1, 0x00, "PAYLOAD.BIN;1"u8);
+        image[checked(((int)firstFileLba - trackBaseLba) * 2048)] = 0xA5;
+        return image;
+    }
+
+    private static void AddToastClassicHfsEvidence(
+        byte[] cooked,
+        int trackBaseLba,
+        uint volumeEndLba)
+    {
+        Span<byte> pvd = cooked.AsSpan(16 * 2048, 2048);
+        pvd.Slice(574, 128).Fill((byte)' ');
+        "TOAST ISO 9660 BUILDER COPYRIGHT (C) 1997-2005 SONIC SOLUTIONS - HAVE A NICE DAY"u8
+            .CopyTo(pvd[574..]);
+
+        int alternateMdbOffset = checked(((int)volumeEndLba - trackBaseLba - 1) * 2048 + 1024);
+        Span<byte> mdb = cooked.AsSpan(alternateMdbOffset, 512);
+        BinaryPrimitives.WriteUInt16BigEndian(mdb, 0x4244);
+        BinaryPrimitives.WriteUInt16BigEndian(mdb.Slice(18, 2), 667);
+        BinaryPrimitives.WriteUInt32BigEndian(mdb.Slice(20, 4), 2048);
+        BinaryPrimitives.WriteUInt16BigEndian(mdb.Slice(28, 2), 4);
+        mdb[36] = 3;
+        "GoM"u8.CopyTo(mdb[37..]);
+        BinaryPrimitives.WriteUInt32BigEndian(mdb.Slice(84, 4), 19);
+        BinaryPrimitives.WriteUInt32BigEndian(mdb.Slice(88, 4), 3);
+        BinaryPrimitives.WriteUInt32BigEndian(mdb.Slice(146, 4), 18_432);
+        BinaryPrimitives.WriteUInt16BigEndian(mdb.Slice(136, 2), 1);
+        BinaryPrimitives.WriteUInt16BigEndian(mdb.Slice(150, 2), 1);
+        BinaryPrimitives.WriteUInt16BigEndian(mdb.Slice(152, 2), 9);
+    }
+
+    private static byte[] BuildToastClassicSystemArea(
+        string partitionName,
+        uint partitionMapBlocks,
+        uint status)
+    {
+        const uint partitionStart = 120;
+        const uint partitionBlocks = 2676;
+        byte[] payload = new byte[16 * 2048];
+        Span<byte> sector = payload.AsSpan(0, 2048);
+        sector[0] = 0x45;
+        sector[1] = 0x52;
+        BinaryPrimitives.WriteUInt16BigEndian(sector.Slice(2, 2), 512);
+        BinaryPrimitives.WriteUInt32BigEndian(sector.Slice(4, 4), partitionStart + partitionBlocks);
+        BinaryPrimitives.WriteUInt16BigEndian(sector.Slice(8, 2), 1);
+        BinaryPrimitives.WriteUInt16BigEndian(sector.Slice(10, 2), 1);
+        WriteApplePartitionEntryForTest(
+            sector.Slice(512, 512),
+            1,
+            partitionMapBlocks,
+            "MRKS",
+            "Apple_partition_map",
+            status);
+        WriteApplePartitionEntryForTest(
+            sector.Slice(1024, 512),
+            partitionStart,
+            partitionBlocks,
+            partitionName,
+            "Apple_HFS",
+            status);
+        return payload;
+    }
+
+    private static void WriteApplePartitionEntryForTest(
+        Span<byte> entry,
+        uint startBlock,
+        uint blockCount,
+        string name,
+        string type,
+        uint status)
+    {
+        entry[0] = 0x50;
+        entry[1] = 0x4D;
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(4, 4), 2);
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(8, 4), startBlock);
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(12, 4), blockCount);
+        Encoding.ASCII.GetBytes(name).AsSpan(0, Math.Min(32, name.Length)).CopyTo(entry[16..]);
+        Encoding.ASCII.GetBytes(type).AsSpan(0, Math.Min(32, type.Length)).CopyTo(entry[48..]);
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(84, 4), blockCount);
+        BinaryPrimitives.WriteUInt32BigEndian(entry.Slice(88, 4), status);
+    }
+
+    private static byte[] ToRawMode1(byte[] cooked, int baseLba = 0)
     {
         int sectors = cooked.Length / 2048;
         byte[] raw = new byte[sectors * 2352];
@@ -250,13 +567,13 @@ public sealed class KnownGapRecoveryTests
             Iso2BinService.BuildRawSectorFromCooked(
                 cooked.AsSpan(lba * 2048, 2048),
                 raw.AsSpan(lba * 2352, 2352),
-                lba,
+                checked(baseLba + lba),
                 CdSectorMode.Mode1);
         }
         return raw;
     }
 
-    private static void WriteDirectoryRecord(
+    private static int WriteDirectoryRecord(
         Span<byte> target,
         int offset,
         uint extentLba,
@@ -275,6 +592,7 @@ public sealed class KnownGapRecoveryTests
         record[31] = 1;
         record[32] = checked((byte)identifier.Length);
         identifier.CopyTo(record[33..]);
+        return length;
     }
 
     private static void WriteBothEndian32(Span<byte> target, int offset, uint value)

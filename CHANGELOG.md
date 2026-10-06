@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.113 — 2026-10-06
+
+### Added
+
+- SkeleTool recognizes Toast 2.5 through 9.0.5 classic-HFS partition-map variants and can reconstruct a missing primary HFS master directory block from a surviving alternate copy. All generated GAP and system-area payloads must match their manifest SHA-1.
+- SkeleTool identifies the observed 152-sector zero post-HFS tail when both its geometry and manifest hash agree.
+- Source-image scans try up to 152 zero-filled tail sectors when a GAP extends beyond donor ISO/BIN EOF. The full manifest SHA-1 verifies the donor payload and appended zeros, which are streamed during restoration.
+
+### Changed
+
+- Source-image match logs explicitly report appended zero tail sectors, their byte count, and verification of the complete padded payload.
+- Toast HFS structures erased by a GAP appear as separate HFS-only evidence in the matched and still-needed trees, preserving the ordinary ISO filenames and sizes. Evidence moves to matched when its containing GAP is recovered, and its unresolved warning is cleared.
+
+### Fixed
+
+- Redumper hash paths with a literal `/0/` root prefix now map to the ISO root while preserving exact matches for real directories named `0` and original manifest paths in reports.
+- Redumper `GAP_#######` addresses now resolve relative to a split track's raw-header base LBA, with bounds checks to prevent gaps from extending beyond the track.
+
 ## 0.8.112 — 2026-09-29
 
 ### Added

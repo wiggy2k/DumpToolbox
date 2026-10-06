@@ -494,13 +494,28 @@ public sealed partial class SkeletonResurrectionService
                 cancellationToken.ThrowIfCancellationRequested();
                 string displayPath = $"{imagePath}::{entry.Path}";
                 string? sha1 = null;
+                long zeroPaddingBytes = 0;
                 try
                 {
+                    long imageEndLba = checked((long)reader.BaseLba + reader.SectorCount);
+                    long availableBytes = checked((imageEndLba - entry.ExtentLba) * CookedSectorSize);
+                    // Try short missing tails only for GAPs extending past donor EOF.
+                    // The manifest SHA-1 must prove both the donor bytes and added zeros.
+                    if (entry.SpecialKind == SkeletonSpecialKind.Gap &&
+                        string.IsNullOrWhiteSpace(entry.XaSha1) &&
+                        entry.ExtentLba >= reader.BaseLba && availableBytes > 0 &&
+                        entry.DataLength > availableBytes &&
+                        entry.DataLength - availableBytes <= 152L * CookedSectorSize &&
+                        entry.DataLength % CookedSectorSize == 0)
+                    {
+                        zeroPaddingBytes = entry.DataLength - availableBytes;
+                    }
                     sha1 = await CalculateSourceImageRegionSha1Async(
                         reader,
                         entry.ExtentLba,
-                        entry.DataLength,
-                        cancellationToken).ConfigureAwait(false);
+                        entry.DataLength - zeroPaddingBytes,
+                        cancellationToken,
+                        zeroPaddingBytes).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or EndOfStreamException or OverflowException)
                 {
@@ -511,7 +526,7 @@ public sealed partial class SkeletonResurrectionService
 
                 if (sha1 is not null && sha1.Equals(entry.Sha1, StringComparison.OrdinalIgnoreCase))
                 {
-                    var extents = new[] { new SkeletonSourceImageExtent(entry.ExtentLba, entry.DataLength) };
+                    var extents = new[] { new SkeletonSourceImageExtent(entry.ExtentLba, entry.DataLength - zeroPaddingBytes) };
                     string regionName = entry.SpecialKind == SkeletonSpecialKind.SystemArea
                         ? "SYSTEM_AREA"
                         : "GAP";
@@ -520,11 +535,13 @@ public sealed partial class SkeletonResurrectionService
                         imagePath,
                         sha1,
                         false,
-                        $"ISO/BIN image {regionName} logical payload SHA1",
+                        $"ISO/BIN image {regionName} logical payload SHA1" +
+                            (zeroPaddingBytes > 0 ? $" + {zeroPaddingBytes / CookedSectorSize:N0} zero tail sectors" : ""),
                         entry.Path,
                         entry.ExtentLba,
                         entry.DataLength,
-                        SourceImageExtents: extents);
+                        SourceImageExtents: extents,
+                        SourceZeroPaddingBytes: zeroPaddingBytes);
                     progress?.Report(new SkeletonSourceScanProgress(
                         processed,
                         totalItems,
@@ -697,7 +714,8 @@ public sealed partial class SkeletonResurrectionService
         SkeletonImageReader reader,
         long startLba,
         long byteLength,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long zeroPaddingBytes = 0)
     {
         if (byteLength <= 0)
             throw new InvalidOperationException("Image region length must be positive.");
@@ -714,6 +732,14 @@ public sealed partial class SkeletonResurrectionService
             lba++;
         }
 
+        byte[] zeros = new byte[CookedSectorSize];
+        while (zeroPaddingBytes > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int count = (int)Math.Min(zeroPaddingBytes, zeros.Length);
+            hash.AppendData(zeros, 0, count);
+            zeroPaddingBytes -= count;
+        }
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 

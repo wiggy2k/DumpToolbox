@@ -73,10 +73,11 @@ public sealed partial class SkeletonResurrectionService
             }
         }
 
+        var isoPaths = byPath.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var unmapped = new List<EntryBuilder>();
         foreach (HashManifestEntry item in manifest)
         {
-            string manifestPath = NormalizeManifestPath(item.Path);
+            string manifestPath = ResolveManifestPath(item.Path, isoPaths);
 
             // Prefer an exact ISO filename match first. Only treat a trailing .XA as
             // redumper's alternate Form2 hash when no real file with that name exists.
@@ -113,12 +114,24 @@ public sealed partial class SkeletonResurrectionService
                 continue;
             }
 
-            if (TryParseGapLba(manifestPath, out uint gapLba))
+            if (TryParseGapLba(manifestPath, out uint relativeGapLba))
             {
                 bool gapXa = manifestPath.EndsWith(".XA", StringComparison.OrdinalIgnoreCase);
                 string gapKey = gapXa ? manifestPath[..^3] : manifestPath;
                 if (!byPath.TryGetValue(gapKey, out EntryBuilder? gapTarget))
                 {
+                    long absoluteGapLba = checked((long)reader.BaseLba + relativeGapLba);
+                    long imageEndLba = checked((long)reader.BaseLba + reader.SectorCount);
+                    if (absoluteGapLba < reader.BaseLba ||
+                        absoluteGapLba >= imageEndLba ||
+                        absoluteGapLba > uint.MaxValue)
+                    {
+                        throw new InvalidDataException(
+                            $"Manifest GAP '{gapKey}' resolves to absolute LBA {absoluteGapLba:N0}, " +
+                            $"outside skeleton range {reader.BaseLba:N0}-{imageEndLba - 1:N0}.");
+                    }
+
+                    uint gapLba = checked((uint)absoluteGapLba);
                     long gapLength = isoTree.GetGapPayloadLength(gapLba, CookedSectorSize);
                     gapTarget = new EntryBuilder(gapKey, gapLba, gapLength, SkeletonSpecialKind.Gap, true);
                     byPath[gapKey] = gapTarget;
@@ -174,8 +187,17 @@ public sealed partial class SkeletonResurrectionService
                 .Select(entry => entry.Path),
             manifest.Select(entry => entry.Path));
 
+        ToastHybridRecoveryAssessment? toastHybridRecovery =
+            await TryAssessToastHybridRecoveryAsync(reader, isoTree, entries, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<KnownGapRecoveryInfo> knownGapRecoveries =
             await TryCreateKnownGapRecoveriesAsync(reader, entries, cancellationToken).ConfigureAwait(false);
+        knownGapRecoveries = await AddToastHybridGapRecoveriesAsync(
+                reader,
+                entries,
+                toastHybridRecovery,
+                knownGapRecoveries,
+                cancellationToken)
+            .ConfigureAwait(false);
         SubchannelEvidenceAnalysis subchannelEvidence =
             await AnalyzeCompanionSubchannelAsync(skeleton, entries, cancellationToken).ConfigureAwait(false);
 
@@ -244,11 +266,19 @@ public sealed partial class SkeletonResurrectionService
             }
             else
             {
-                knownSystemAreaRecovery = await TryCreateKnownSystemAreaRecoveryAsync(
-                    reader,
-                    isoTree.VolumeSpaceSize,
-                    expectedSystemAreaSha1,
-                    cancellationToken).ConfigureAwait(false);
+                if (toastHybridRecovery is not null)
+                {
+                    knownSystemAreaRecovery = TryBuildToastHybridSystemArea(
+                        toastHybridRecovery,
+                        reader.BaseLba,
+                        expectedSystemAreaSha1);
+                }
+                knownSystemAreaRecovery ??= await TryCreateKnownSystemAreaRecoveryAsync(
+                        reader,
+                        isoTree.VolumeSpaceSize,
+                        expectedSystemAreaSha1,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
 
@@ -272,6 +302,7 @@ public sealed partial class SkeletonResurrectionService
             KnownSystemAreaRecovery = knownSystemAreaRecovery,
             NeroNriWarnings = neroNriWarnings,
             KnownGapRecoveries = knownGapRecoveries,
+            ToastHybridRecovery = toastHybridRecovery,
             GapSubchannelEvidence = subchannelEvidence.Evidence,
             SubchannelEvidenceWarnings = subchannelEvidence.Warnings
         };
@@ -317,16 +348,36 @@ public sealed partial class SkeletonResurrectionService
         return true;
     }
 
+    private static string ResolveManifestPath(string path, IReadOnlySet<string> isoPaths)
+    {
+        string normalized = NormalizeManifestPath(path);
+        bool HasTarget(string candidate) => isoPaths.Contains(candidate) ||
+            (candidate.EndsWith(".XA", StringComparison.OrdinalIgnoreCase) &&
+             isoPaths.Contains(candidate[..^3]));
+
+        // Some redumper manifests include the ISO root identifier as a literal /0/.
+        // Keep actual paths (including real directories named 0) authoritative.
+        if (normalized.StartsWith("/0/", StringComparison.Ordinal) && !HasTarget(normalized))
+        {
+            string rootRelative = normalized[2..];
+            if (HasTarget(rootRelative))
+                return rootRelative;
+        }
+        return normalized;
+    }
     internal static IReadOnlyList<string> FindFilesMissingFromHashManifest(
         IEnumerable<string> skeletonFilePaths,
         IEnumerable<string> manifestPaths)
     {
+        var skeletonPaths = skeletonFilePaths.Select(NormalizeIsoPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var exactManifestPaths = manifestPaths
-            .Select(NormalizeManifestPath)
+            .Select(path => ResolveManifestPath(path, skeletonPaths))
             .Where(path => path.StartsWith('/'))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        return skeletonFilePaths
+        return skeletonPaths
             .Select(NormalizeIsoPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(path => !exactManifestPaths.Contains(path))

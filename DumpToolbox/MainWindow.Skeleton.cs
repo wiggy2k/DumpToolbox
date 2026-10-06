@@ -208,21 +208,11 @@ public partial class MainWindow : Window
 
             bool hasManifestWarnings = inspection.MissingHashEntryCount > 0 || inspection.UnmappedHashEntryCount > 0;
             bool hasNeroNriWarnings = inspection.NeroNriWarnings.Count > 0;
-            string manifestWarningSummary = inspection.MissingHashEntryCount > 0 && inspection.UnmappedHashEntryCount > 0
-                ? $" WARNING: {inspection.MissingHashEntryCount:N0} ISO file(s) have no manifest hash; {inspection.UnmappedHashEntryCount:N0} manifest entry/entries are unused."
-                : inspection.MissingHashEntryCount > 0
-                    ? $" WARNING: {inspection.MissingHashEntryCount:N0} ISO file(s) have no manifest hash."
-                    : inspection.UnmappedHashEntryCount > 0
-                        ? $" WARNING: {inspection.UnmappedHashEntryCount:N0} manifest entry/entries are unused."
-                        : string.Empty;
-            string neroWarningSummary = hasNeroNriWarnings
-                ? $" WARNING: {inspection.NeroNriWarnings.Count:N0} required Nero NRI payload(s) are unavailable."
-                : string.Empty;
-            SkeletonInspectionText.Text =
-                $"{kind}; {inspection.SectorCount:N0} sectors; volume '{inspection.VolumeIdentifier}'; " +
-                $"{normalFiles:N0} ISO files, {special:N0} special/hash-only entries, {inspection.HashEntryCount:N0} manifest hashes." +
-                manifestWarningSummary + neroWarningSummary;
-            SkeletonProgressText.Text = hasManifestWarnings || hasNeroNriWarnings ? "Loaded with warning" : "Loaded";
+            bool hasBlockedToastHybrid = HasUnresolvedToastHfsEvidence(inspection);
+            UpdateSkeletonInspectionSummary(inspection);
+            SkeletonProgressText.Text = hasManifestWarnings || hasNeroNriWarnings || hasBlockedToastHybrid
+                ? "Loaded with warning"
+                : "Loaded";
             AppendSkeletonLog($"Detected {kind}.");
             AppendSkeletonLog($"ISO9660 volume: {inspection.VolumeIdentifier}");
             AppendSkeletonLog($"ISO files: {normalFiles:N0}; manifest entries: {inspection.HashEntryCount:N0}; unmapped hashes: {inspection.UnmappedHashEntryCount:N0}.");
@@ -251,6 +241,14 @@ public partial class MainWindow : Window
             {
                 AppendSkeletonLog(
                     $"{knownGap.Path}: recognized {knownGap.PatternName}. The generated payload pattern was verified against the manifest SHA-1.");
+            }
+            if (inspection.ToastHybridRecovery is { } toastHybrid)
+            {
+                string disposition = toastHybrid.CanReconstructExactly
+                    ? "The region is structurally eligible for hash-verified Toast synthesis."
+                    : "Automatic reconstruction was not offered because those HFS-only bytes have no exact source evidence.";
+                AppendSkeletonLog(
+                    $"TOAST HFS — {toastHybrid.GapPath}: {toastHybrid.Summary}. " + disposition);
             }
             foreach (GapSubchannelEvidence evidence in inspection.GapSubchannelEvidence)
             {
@@ -474,6 +472,17 @@ public partial class MainWindow : Window
             string length = match.SourceLength is long sourceLength
                 ? $" ({sourceLength:N0} logical bytes)"
                 : string.Empty;
+            if (match.SourceZeroPaddingBytes > 0)
+            {
+                long donorBytes = (match.SourceLength ?? match.Entry.DataLength) - match.SourceZeroPaddingBytes;
+                AppendSkeletonLog(
+                    $"{match.Entry.Path}: matched source image region{lba}; " +
+                    $"{donorBytes:N0} donor logical bytes + appended " +
+                    $"{match.SourceZeroPaddingBytes / SkeletonResurrectionService.CookedSectorSize:N0} zero-filled tail sectors " +
+                    $"({match.SourceZeroPaddingBytes:N0} zero bytes); " +
+                    $"SHA-1 {match.Sha1} MATCH (including appended zeros)");
+                continue;
+            }
             AppendSkeletonLog(
                 $"{match.Entry.Path}: matched source image region{lba}{length}; " +
                 $"SHA-1 {match.Sha1} MATCH");
@@ -687,12 +696,13 @@ public partial class MainWindow : Window
 
         BuildSkeletonTreeGroup(_skeletonMatchedTreeRoots, readyEntries, inspection);
         BuildSkeletonTreeGroup(_skeletonOutstandingTreeRoots, outstandingEntries, inspection);
+        bool hasMissingHfsEvidence = AddToastHfsTree(inspection);
 
         int matched = readyEntries.Count(entry => _skeletonMatches.ContainsKey(entry.Path));
         int inherentlyReady = readyEntries.Length - matched;
         int needed = outstandingEntries.Count(IsRequiredSkeletonSourceEntry);
         int ignored = outstandingEntries.Count(entry => entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry);
-        int unknown = outstandingEntries.Length - needed - ignored;
+        int unknown = outstandingEntries.Length - needed - ignored + (hasMissingHfsEvidence ? 1 : 0);
 
         SkeletonMatchedTreeHeading.Text = inherentlyReady > 0
             ? $"Matched / ready — {matched:N0} matched, {inherentlyReady:N0} already satisfied"
@@ -700,6 +710,104 @@ public partial class MainWindow : Window
         SkeletonOutstandingTreeHeading.Text = ignored > 0
             ? $"Still needed / unknown — {needed:N0} needed, {unknown:N0} unknown, {ignored:N0} ignored"
             : $"Still needed / unknown — {needed:N0} needed, {unknown:N0} unknown";
+        UpdateSkeletonInspectionSummary(inspection);
+    }
+
+    private bool AddToastHfsTree(SkeletonInspectionResult inspection)
+    {
+        if (inspection.ToastHybridRecovery is not { CanReconstructExactly: false } hfs)
+            return false;
+
+        bool recovered = IsToastHfsEvidenceSatisfied(inspection, hfs);
+        long extraFiles = Math.Max(0, (long)hfs.HfsFileCount - hfs.IsoFileCount);
+        long extraDirectories = Math.Max(0, (long)hfs.HfsDirectoryCount - hfs.IsoDirectoryCount);
+        var root = new SkeletonTreeNode(
+            recovered
+                ? $"HFS data recovered with matched {hfs.GapPath} payload"
+                : "HFS data missing from skeleton and hash",
+            isFolder: true,
+            isHfsMissingEvidence: true)
+        {
+            Status = recovered ? "✓" : "◆"
+        };
+
+        root.Children.Add(new SkeletonTreeNode(
+            $"Volume '{hfs.HfsVolumeName}': {extraFiles:N0} HFS-only file(s), {extraDirectories:N0} HFS-only directory entry/entries",
+            isFolder: false,
+            isHfsMissingEvidence: true));
+        root.Children.Add(new SkeletonTreeNode(
+            $"{hfs.UnexplainedAllocatedSectors:N0} allocated sector(s) " +
+            $"({hfs.UnexplainedAllocatedSectors * 2048:N0} bytes) precede the first shared ISO file at LBA {hfs.FirstSharedFileLba:N0}",
+            isFolder: false,
+            isHfsMissingEvidence: true));
+        long catalogEndLba = hfs.HfsCatalogFileSize == 0
+            ? hfs.HfsCatalogStartLba
+            : hfs.HfsCatalogStartLba +
+              (hfs.HfsCatalogStartByteOffset + hfs.HfsCatalogFileSize - 1) / 2048;
+        root.Children.Add(new SkeletonTreeNode(
+            $"HFS catalog B-tree: LBA {hfs.HfsCatalogStartLba:N0}-{catalogEndLba:N0}, " +
+            $"{hfs.HfsCatalogFileSize:N0} bytes" +
+            (hfs.HfsCatalogCoveredByGap
+                ? recovered
+                    ? $" — recovered with {hfs.GapPath}"
+                    : $" — erased with {hfs.GapPath}"
+                : string.Empty),
+            isFolder: false,
+            isHfsMissingEvidence: true));
+        root.Children.Add(new SkeletonTreeNode(
+            recovered
+                ? $"The complete hash-matched {hfs.GapPath} payload supplies the HFS-only bytes for resurrection"
+                : hfs.HfsCatalogCoveredByGap
+                    ? "Names, parent folders, timestamps, fork sizes, and extents unavailable because their catalog records were erased"
+                    : "Names, parent folders, timestamps, fork sizes, and extents are not available from the surviving HFS evidence",
+            isFolder: false,
+            isHfsMissingEvidence: true));
+
+        if (recovered)
+            _skeletonMatchedTreeRoots.Insert(0, root);
+        else
+            _skeletonOutstandingTreeRoots.Insert(0, root);
+        return !recovered;
+    }
+
+    private bool HasUnresolvedToastHfsEvidence(SkeletonInspectionResult inspection) =>
+        inspection.ToastHybridRecovery is { CanReconstructExactly: false } hfs &&
+        !IsToastHfsEvidenceSatisfied(inspection, hfs);
+
+    private bool IsToastHfsEvidenceSatisfied(
+        SkeletonInspectionResult inspection,
+        ToastHybridRecoveryAssessment hfs)
+    {
+        SkeletonContentEntry? gap = inspection.Entries.FirstOrDefault(entry =>
+            entry.SpecialKind == SkeletonSpecialKind.Gap &&
+            entry.Path.Equals(hfs.GapPath, StringComparison.OrdinalIgnoreCase));
+        return gap is not null && IsSkeletonEntryReady(inspection, gap);
+    }
+
+    private void UpdateSkeletonInspectionSummary(SkeletonInspectionResult inspection)
+    {
+        int normalFiles = inspection.Entries.Count(entry => entry.SpecialKind == SkeletonSpecialKind.None);
+        int special = inspection.Entries.Count(entry => entry.IsSpecial);
+        string kind = inspection.ImageKind == SkeletonImageKind.Raw2352
+            ? $"raw 2352-byte CD data track, base LBA {inspection.BaseLba:N0}"
+            : "cooked 2048-byte ISO";
+        string manifestWarningSummary = inspection.MissingHashEntryCount > 0 && inspection.UnmappedHashEntryCount > 0
+            ? $" WARNING: {inspection.MissingHashEntryCount:N0} ISO file(s) have no manifest hash; {inspection.UnmappedHashEntryCount:N0} manifest entry/entries are unused."
+            : inspection.MissingHashEntryCount > 0
+                ? $" WARNING: {inspection.MissingHashEntryCount:N0} ISO file(s) have no manifest hash."
+                : inspection.UnmappedHashEntryCount > 0
+                    ? $" WARNING: {inspection.UnmappedHashEntryCount:N0} manifest entry/entries are unused."
+                    : string.Empty;
+        string neroWarningSummary = inspection.NeroNriWarnings.Count > 0
+            ? $" WARNING: {inspection.NeroNriWarnings.Count:N0} required Nero NRI payload(s) are unavailable."
+            : string.Empty;
+        string toastWarningSummary = HasUnresolvedToastHfsEvidence(inspection)
+            ? " WARNING: the Toast HFS GAP contains content not represented by the ISO tree."
+            : string.Empty;
+        SkeletonInspectionText.Text =
+            $"{kind}; {inspection.SectorCount:N0} sectors; volume '{inspection.VolumeIdentifier}'; " +
+            $"{normalFiles:N0} ISO files, {special:N0} special/hash-only entries, {inspection.HashEntryCount:N0} manifest hashes." +
+            manifestWarningSummary + neroWarningSummary + toastWarningSummary;
     }
 
     private void BuildSkeletonTreeGroup(

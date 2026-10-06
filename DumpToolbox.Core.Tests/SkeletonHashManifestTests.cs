@@ -8,6 +8,44 @@ namespace DumpToolbox.Core.Tests;
 public sealed class SkeletonHashManifestTests
 {
     [Fact]
+    public async Task InspectionMapsRedumperRootPrefixAndPreservesManifestPath()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"skeletool-root-hash-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string skeleton = Path.Combine(directory, "disc.skeleton");
+            string hash = Path.Combine(directory, "disc.hash");
+            await File.WriteAllBytesAsync(skeleton, BuildIsoWithManifestlessFiles([1, 2, 3, 4]));
+            const string sha1 = "0123456789abcdef0123456789abcdef01234567";
+            await File.WriteAllTextAsync(hash, $"{sha1} /0/PRESENT.BIN\n{sha1} /0/MISSING.BIN.XA\n");
+            var inspection = await new SkeletonResurrectionService().InspectAsync(skeleton, hash);
+            var present = Assert.Single(inspection.Entries, entry => entry.Path == "/PRESENT.BIN");
+            Assert.Equal(sha1, present.Sha1);
+            Assert.Equal("/0/PRESENT.BIN", present.ManifestPath);
+            var missing = Assert.Single(inspection.Entries, entry => entry.Path == "/MISSING.BIN");
+            Assert.Equal(sha1, missing.XaSha1);
+            Assert.Equal("/0/MISSING.BIN.XA", missing.XaManifestPath);
+            Assert.DoesNotContain(inspection.Entries, entry => entry.SpecialKind == SkeletonSpecialKind.UnmappedHashEntry);
+            Assert.Equal(["/MISSING.BIN"], inspection.FilesMissingFromHashManifest);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RootPrefixDoesNotOverrideRealZeroDirectoryOrInventMissingTargets()
+    {
+        Assert.Equal(["/FILE.BIN"], SkeletonResurrectionService.FindFilesMissingFromHashManifest(
+            ["/FILE.BIN", "/0/FILE.BIN"], ["/0/FILE.BIN"]));
+        Assert.Empty(SkeletonResurrectionService.FindFilesMissingFromHashManifest(
+            ["/FILE.BIN"], ["/0/FILE.BIN"]));
+        Assert.Equal(["/OTHER.BIN"], SkeletonResurrectionService.FindFilesMissingFromHashManifest(
+            ["/OTHER.BIN"], ["/0/FILE.BIN"]));
+    }
+    [Fact]
     public async Task InspectionInfersCanonicalSha1ForManifestlessZeroLengthFiles()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"skeletool-empty-hash-{Guid.NewGuid():N}");

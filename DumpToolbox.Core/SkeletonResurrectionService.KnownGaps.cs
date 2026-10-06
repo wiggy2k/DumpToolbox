@@ -30,15 +30,19 @@ public sealed partial class SkeletonResurrectionService
             if (entry is null)
                 continue;
 
+            bool generatedPayload = info.GeneratedPayload is not null;
             matches.Add(new SkeletonSourceMatch(
                 entry,
                 $"Generated known GAP: {info.PatternName}",
                 info.ExpectedSha1,
                 IsXa: false,
-                MatchMethod: "Known Redumper GAP reconstruction",
+                MatchMethod: generatedPayload
+                    ? "Known Toast HFS GAP reconstruction"
+                    : "Known Redumper GAP reconstruction",
                 SourceRelativePath: info.PatternName,
-                SourceLength: 0,
-                GeneratedGapRecovery: info));
+                SourceLength: info.GeneratedPayload?.LongLength ?? 0,
+                GeneratedPayload: info.GeneratedPayload,
+                GeneratedGapRecovery: generatedPayload ? null : info));
         }
         return matches;
     }

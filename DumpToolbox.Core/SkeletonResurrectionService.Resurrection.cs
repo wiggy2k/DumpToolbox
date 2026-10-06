@@ -33,7 +33,9 @@ public sealed partial class SkeletonResurrectionService
             foreach (SkeletonSourceMatch generated in generatedGapMatches)
             {
                 augmented[generated.Entry.Path] = generated;
-                KnownGapRecoveryInfo info = generated.GeneratedGapRecovery!;
+                KnownGapRecoveryInfo info = inspection.KnownGapRecoveries.First(candidate =>
+                    candidate.Path.Equals(generated.Entry.Path, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(candidate.ExpectedSha1, generated.Sha1, StringComparison.OrdinalIgnoreCase));
                 activity?.Report(
                     $"{generated.Entry.Path}: generated {info.PatternName}; " +
                     $"manifest SHA-1 {generated.Sha1} MATCH");
@@ -974,7 +976,7 @@ public sealed partial class SkeletonResurrectionService
         IReadOnlyList<SkeletonSourceImageExtent> extents = match.SourceImageExtents is { Count: > 0 }
             ? match.SourceImageExtents
             : new[] { new SkeletonSourceImageExtent(match.SourceImageLba.Value, length) };
-        return new OpticalImageExtentStream(match.SourcePath, extents, length);
+        return new OpticalImageExtentStream(match.SourcePath, extents, length, match.SourceZeroPaddingBytes);
     }
 
     private static int ResurrectCookedSequential(

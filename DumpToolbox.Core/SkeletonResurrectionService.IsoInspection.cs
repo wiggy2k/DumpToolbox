@@ -76,6 +76,7 @@ public sealed partial class SkeletonResurrectionService
             throw new InvalidOperationException("No ISO9660 primary volume descriptor was found in the skeleton.");
 
         string volumeIdentifier = Encoding.ASCII.GetString(pvd, 40, 32).TrimEnd(' ', '\0');
+        string applicationIdentifier = Encoding.ASCII.GetString(pvd, 574, 128).TrimEnd(' ', '\0');
         DirectoryRecord root = ParseDirectoryRecord(pvd, 156);
         var files = new List<IsoFileExtent>();
         var neroProjects = new List<NeroProjectEntry>();
@@ -161,6 +162,8 @@ public sealed partial class SkeletonResurrectionService
         return new IsoTree(
             volumeIdentifier,
             volumeSpaceSize,
+            applicationIdentifier,
+            Math.Max(0, visitedDirectories.Count - 1),
             files,
             areaStarts.OrderBy(v => v).ToArray(),
             verifiedNeroProjects,

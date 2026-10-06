@@ -8,19 +8,28 @@ namespace DumpToolbox;
 
 public sealed class SkeletonTreeNode : INotifyPropertyChanged
 {
+    private static readonly IBrush HfsMissingBrush = new SolidColorBrush(Color.Parse("#C084FC"));
     private string _status = string.Empty;
     private string? _sourcePath;
+    private readonly bool _isFolder;
 
-    public SkeletonTreeNode(string name, SkeletonContentEntry? entry = null)
+    public SkeletonTreeNode(
+        string name,
+        SkeletonContentEntry? entry = null,
+        bool? isFolder = null,
+        bool isHfsMissingEvidence = false)
     {
         Name = name;
         Entry = entry;
+        _isFolder = isFolder ?? entry is null;
+        IsHfsMissingEvidence = isHfsMissingEvidence;
     }
 
     public string Name { get; }
     public SkeletonContentEntry? Entry { get; }
     public ObservableCollection<SkeletonTreeNode> Children { get; } = new();
-    public bool IsFolder => Entry is null;
+    public bool IsFolder => _isFolder;
+    public bool IsHfsMissingEvidence { get; }
 
     public string Status
     {
@@ -55,7 +64,7 @@ public sealed class SkeletonTreeNode : INotifyPropertyChanged
     {
         get
         {
-            if (IsFolder)
+            if (Entry is null)
                 return Name;
 
             string size = $"  ({FormatBytes(Entry!.DataLength)})";
@@ -70,7 +79,7 @@ public sealed class SkeletonTreeNode : INotifyPropertyChanged
     {
         get
         {
-            if (IsFolder)
+            if (Entry is null)
                 return Name;
 
             string size = $"  ({FormatBytes(Entry!.DataLength)})";
@@ -80,6 +89,7 @@ public sealed class SkeletonTreeNode : INotifyPropertyChanged
     }
 
     public IBrush? StatusForeground =>
+        IsHfsMissingEvidence ? HfsMissingBrush :
         Status.StartsWith("✓", StringComparison.Ordinal) ? Brushes.LimeGreen :
         Status.StartsWith("✗", StringComparison.Ordinal) ? Brushes.Red :
         Status.StartsWith("?", StringComparison.Ordinal) ? Brushes.DarkOrange :

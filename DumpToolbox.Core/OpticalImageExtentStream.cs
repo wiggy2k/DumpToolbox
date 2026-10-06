@@ -16,11 +16,13 @@ internal sealed class OpticalImageExtentStream : Stream
     private readonly byte[] _rawSector = new byte[SkeletonResurrectionService.RawSectorSize];
     private long _cachedRawSector = -1;
     private long _position;
+    private readonly long _imagePayloadLength;
 
     public OpticalImageExtentStream(
         string imagePath,
         IReadOnlyList<SkeletonSourceImageExtent> extents,
-        long expectedLength)
+        long expectedLength,
+        long zeroPaddingBytes = 0)
     {
         if (string.IsNullOrWhiteSpace(imagePath))
             throw new ArgumentException("A source image path is required.", nameof(imagePath));
@@ -28,6 +30,8 @@ internal sealed class OpticalImageExtentStream : Stream
             throw new ArgumentException("At least one source-image extent is required.", nameof(extents));
         if (expectedLength < 0)
             throw new ArgumentOutOfRangeException(nameof(expectedLength));
+        if (zeroPaddingBytes < 0 || zeroPaddingBytes > expectedLength)
+            throw new ArgumentOutOfRangeException(nameof(zeroPaddingBytes));
 
         _source = new FileStream(
             imagePath,
@@ -58,13 +62,14 @@ internal sealed class OpticalImageExtentStream : Stream
                 logicalStart = checked(logicalStart + extent.Length);
             }
 
-            if (logicalStart != expectedLength)
+            if (logicalStart != expectedLength - zeroPaddingBytes)
             {
                 throw new InvalidDataException(
                     $"Source-image extents contain {logicalStart:N0} byte(s), expected {expectedLength:N0}.");
             }
 
-            Length = logicalStart;
+            _imagePayloadLength = logicalStart;
+            Length = expectedLength;
         }
         catch
         {
@@ -106,6 +111,12 @@ internal sealed class OpticalImageExtentStream : Stream
         int written = 0;
         while (written < requested)
         {
+            if (_position >= _imagePayloadLength)
+            {
+                buffer.Slice(written, requested - written).Clear();
+                _position += requested - written;
+                return requested;
+            }
             int extentIndex = FindExtent(_position);
             if (extentIndex < 0)
                 throw new EndOfStreamException("The logical source position is outside its image extents.");

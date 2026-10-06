@@ -105,6 +105,7 @@ public sealed record SkeletonInspectionResult(
     public IReadOnlyList<KnownGapRecoveryInfo> KnownGapRecoveries { get; init; } = Array.Empty<KnownGapRecoveryInfo>();
     public IReadOnlyList<GapSubchannelEvidence> GapSubchannelEvidence { get; init; } = Array.Empty<GapSubchannelEvidence>();
     public IReadOnlyList<string> SubchannelEvidenceWarnings { get; init; } = Array.Empty<string>();
+    public ToastHybridRecoveryAssessment? ToastHybridRecovery { get; init; }
 }
 
 public sealed record SkeletonInputPreparationProgress(
@@ -175,7 +176,29 @@ public sealed record KnownGapRecoveryInfo(
     long Form1SectorCount,
     long Form2SectorCount,
     long PreservedSectorCount,
-    IReadOnlySet<long> GeneratedFill55Lbas);
+    IReadOnlySet<long> GeneratedFill55Lbas,
+    byte[]? GeneratedPayload = null);
+
+public sealed record ToastHybridRecoveryAssessment(
+    string GapPath,
+    string HfsVolumeName,
+    long HfsPartitionStartLba,
+    int HfsPartitionStartByteOffset,
+    uint HfsPartitionBlockCount,
+    ushort HfsAllocationBlockCount,
+    uint HfsAllocationBlockSize,
+    uint HfsFileCount,
+    uint HfsDirectoryCount,
+    int IsoFileCount,
+    int IsoDirectoryCount,
+    long HfsCatalogStartLba,
+    int HfsCatalogStartByteOffset,
+    uint HfsCatalogFileSize,
+    bool HfsCatalogCoveredByGap,
+    long FirstSharedFileLba,
+    long UnexplainedAllocatedSectors,
+    bool CanReconstructExactly,
+    string Summary);
 
 public sealed record GapSubchannelEvidence(
     string GapPath,
@@ -277,7 +300,8 @@ public sealed record SkeletonSourceMatch(
     IReadOnlyList<SkeletonSourceImageExtent>? SourceImageExtents = null,
     SkeletoolCatalogueMatchSource? CatalogueSource = null,
     string? SourceFilesystem = null,
-    KnownGapRecoveryInfo? GeneratedGapRecovery = null);
+    KnownGapRecoveryInfo? GeneratedGapRecovery = null,
+    long SourceZeroPaddingBytes = 0);
 
 public sealed record SkeletonSourceScanProgress(
     int FilesProcessed,
@@ -385,6 +409,8 @@ public sealed partial class SkeletonResurrectionService
     private sealed record IsoTree(
         string VolumeIdentifier,
         uint VolumeSpaceSize,
+        string ApplicationIdentifier,
+        int DirectoryCount,
         IReadOnlyList<IsoFileExtent> Files,
         IReadOnlyList<uint> AreaStarts,
         IReadOnlyList<NeroProjectEntry> NeroProjects,
